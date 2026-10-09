@@ -1,0 +1,184 @@
+From f24e8ec4ad259267914f3d9cbe1b7f7b92e62133 Mon Sep 17 00:00:00 2001
+From: huggy <i@huggy.moe>
+Date: Wed, 12 Aug 2026 12:55:59 +0900
+Subject: [PATCH] avformat/libaribtlv: support timestamp seeking
+
+---
+ libavformat/libaribtlv.c | 124 +++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 120 insertions(+), 4 deletions(-)
+
+diff --git a/libavformat/libaribtlv.c b/libavformat/libaribtlv.c
+index 3da1248..2eba233 100644
+--- a/libavformat/libaribtlv.c
++++ b/libavformat/libaribtlv.c
+@@ -36,6 +36,10 @@
+ #include "internal.h"
+ 
+ #define ARIBTLV_READ_SIZE (64 * 1024)
++#define ARIBTLV_SEEK_MIN_PREROLL (16LL * 1024 * 1024)
++#define ARIBTLV_SEEK_MAX_PREROLL (128LL * 1024 * 1024)
++#define ARIBTLV_SEEK_PROBE_SIZE (64LL * 1024 * 1024)
++#define ARIBTLV_SEEK_MAX_ATTEMPTS 5
+ 
+ typedef struct LibaribtlvTrack {
+     uint64_t id;
+@@ -57,6 +61,10 @@ typedef struct LibaribtlvContext {
+     LibaribtlvPacket *queue_tail;
+     int64_t service;
+     int64_t bytes_read;
++    int seek_probe;
++    int seek_stream_index;
++    int64_t seek_probe_pts;
++    int64_t seek_probe_restart_offset;
+     int eof;
+     int fatal_error;
+ } LibaribtlvContext;
+@@ -178,6 +186,18 @@ static void libaribtlv_on_access_unit(void *opaque,
+         return;
+     st = ctx->format->streams[stream_index];
+ 
++    if (ctx->seek_probe) {
++        if (stream_index == ctx->seek_stream_index && unit->random_access &&
++            ctx->seek_probe_restart_offset < 0) {
++            source_time_base = (AVRational) { 1, unit->pts.timescale ? unit->pts.timescale : 1 };
++            ctx->seek_probe_pts = av_rescale_q(unit->pts.value, source_time_base,
++                                               st->time_base);
++            ctx->seek_probe_restart_offset = unit->restart_offset <= INT64_MAX ?
++                                             unit->restart_offset : -1;
++        }
++        return;
++    }
++
+     queued = av_mallocz(sizeof(*queued));
+     packet = av_packet_alloc();
+     if (!queued || !packet) {
+@@ -433,13 +453,10 @@ static int libaribtlv_read_packet(AVFormatContext *s, AVPacket *pkt)
+     return 0;
+ }
+ 
+-static int libaribtlv_read_close(AVFormatContext *s)
++static void libaribtlv_clear_queue(LibaribtlvContext *ctx)
+ {
+-    LibaribtlvContext *ctx = s->priv_data;
+     LibaribtlvPacket *queued;
+ 
+-    aribtlv_demuxer_destroy(ctx->demuxer);
+-    ctx->demuxer = NULL;
+     while (ctx->queue_head) {
+         queued = ctx->queue_head;
+         ctx->queue_head = queued->next;
+@@ -447,6 +464,104 @@ static int libaribtlv_read_close(AVFormatContext *s)
+         av_free(queued);
+     }
+     ctx->queue_tail = NULL;
++}
++
++static int libaribtlv_reposition(AVFormatContext *s, int64_t offset)
++{
++    LibaribtlvContext *ctx = s->priv_data;
++    int ret;
++
++    if (avio_seek(s->pb, offset, SEEK_SET) < 0)
++        return AVERROR(EIO);
++    ret = aribtlv_demuxer_reposition(ctx->demuxer, offset, 1);
++    if (ret < 0)
++        return AVERROR_INVALIDDATA;
++    ctx->bytes_read = offset;
++    ctx->eof = 0;
++    ctx->fatal_error = 0;
++    return 0;
++}
++
++static int libaribtlv_read_seek(AVFormatContext *s, int stream_index,
++                                int64_t timestamp, int flags)
++{
++    LibaribtlvContext *ctx = s->priv_data;
++    AVStream *st;
++    int64_t source_size;
++    int64_t target_us;
++    int64_t estimate;
++    int64_t preroll;
++    int attempt;
++    int ret = AVERROR(EIO);
++
++    if (flags & (AVSEEK_FLAG_BYTE | AVSEEK_FLAG_FRAME))
++        return AVERROR(ENOSYS);
++    if (!(s->pb->seekable & AVIO_SEEKABLE_NORMAL) || s->duration <= 0 ||
++        stream_index < 0 || stream_index >= s->nb_streams)
++        return AVERROR(ENOSYS);
++    source_size = avio_size(s->pb);
++    if (source_size <= 0)
++        return AVERROR(ENOSYS);
++
++    st = s->streams[stream_index];
++    target_us = av_rescale_q(timestamp, st->time_base, AV_TIME_BASE_Q);
++    if (target_us < 0 || target_us > s->duration)
++        return AVERROR(EINVAL);
++    estimate = av_rescale(target_us, source_size, s->duration);
++    preroll = av_rescale(8 * AV_TIME_BASE, source_size, s->duration);
++    preroll = av_clip64(preroll, ARIBTLV_SEEK_MIN_PREROLL,
++                        ARIBTLV_SEEK_MAX_PREROLL);
++
++    libaribtlv_clear_queue(ctx);
++    ctx->seek_probe = 1;
++    ctx->seek_stream_index = stream_index;
++    for (attempt = 0; attempt < ARIBTLV_SEEK_MAX_ATTEMPTS; attempt++) {
++        int64_t candidate = FFMAX(estimate - preroll, 0);
++        int64_t probe_limit = FFMIN(candidate + ARIBTLV_SEEK_PROBE_SIZE,
++                                    source_size);
++
++        ctx->seek_probe_pts = AV_NOPTS_VALUE;
++        ctx->seek_probe_restart_offset = -1;
++        ret = libaribtlv_reposition(s, candidate);
++        if (ret < 0)
++            break;
++        while (avio_tell(s->pb) < probe_limit &&
++               ctx->seek_probe_restart_offset < 0) {
++            ret = libaribtlv_push_input(s);
++            if (ret < 0)
++                break;
++        }
++        if (ctx->seek_probe_restart_offset >= 0 &&
++            ctx->seek_probe_pts <= timestamp) {
++            ret = libaribtlv_reposition(s, ctx->seek_probe_restart_offset);
++            break;
++        }
++        if (candidate == 0) {
++            ret = AVERROR_INVALIDDATA;
++            break;
++        }
++        preroll = FFMIN(preroll * 2, estimate);
++    }
++    ctx->seek_probe = 0;
++    if (ret < 0)
++        return ret;
++
++    av_log(s, AV_LOG_VERBOSE,
++           "seek timestamp %.3f to RAP %.3f at byte %"PRId64"\n",
++           target_us / (double)AV_TIME_BASE,
++           av_rescale_q(ctx->seek_probe_pts, st->time_base, AV_TIME_BASE_Q) /
++               (double)AV_TIME_BASE,
++           ctx->seek_probe_restart_offset);
++    return 0;
++}
++
++static int libaribtlv_read_close(AVFormatContext *s)
++{
++    LibaribtlvContext *ctx = s->priv_data;
++
++    aribtlv_demuxer_destroy(ctx->demuxer);
++    ctx->demuxer = NULL;
++    libaribtlv_clear_queue(ctx);
+     av_freep(&ctx->tracks);
+     ctx->track_count = 0;
+     return 0;
+@@ -478,5 +593,6 @@ const FFInputFormat ff_libaribtlv_demuxer = {
+     .read_probe     = libaribtlv_probe,
+     .read_header    = libaribtlv_read_header,
+     .read_packet    = libaribtlv_read_packet,
++    .read_seek      = libaribtlv_read_seek,
+     .read_close     = libaribtlv_read_close,
+ };
+-- 
+2.55.0
+

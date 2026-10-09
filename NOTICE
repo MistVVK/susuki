@@ -1,0 +1,44 @@
+NOTICE
+======
+
+Susuki stands on the work of the following authors and projects. Many
+sources in `crates/susuki-core` are strict ports of their implementations,
+adapted to Rust as derivative works (see LICENSES/README.md).
+
+* join_logo_scp — https://github.com/tobitti0/join_logo_scp
+  Copyright (C) 2016-2026 tobitti0
+  GPL-2.0-or-later
+  The composition-estimation engine (AutoCM / AutoCut / AutoAdd /
+  AutoEdge, the JLS script language, dataset and trim logic) is ported
+  from this project (pinned commit d1a24d758f8b3c04352b82ff6756fdf3d56729b3).
+  Thanks for releasing it as free software and for the accompanying
+  documentation of the format behaviour.
+
+* chapter_exe — https://github.com/rigaya/chapter_exe
+  Copyright (C) rigaya
+  GPL-2.0-or-later
+  Silence detection, scene-change detection and the SCPos file semantics
+  are ported from this project (pinned commit 32880d45f088e574285a101e6a49b032bb04f6ea).
+
+* logoframe — https://github.com/tobitti0/logoframe
+  Copyright (C) tobitti0
+  GPL-2.0-or-later
+  Logo-interval detection and the logo file format are ported from this
+  project (pinned commit c93aec0c89838e9b4dd3a9a3d5496dfaaa41311d).
+
+* FFmpeg — https://github.com/FFmpeg/FFmpeg
+  Copyright (C) the FFmpeg developers
+  LGPL-2.1-or-later (this tool links an LGPL build; see scripts/ffmpeg-build.sh)
+  Used as the demuxing/decoding backend (n8.1.2, pinned in ffmpeg.lock).
+
+* libaribtlv and ffmpeg-libaribtlv — https://github.com/makeding/libaribtlv
+  Copyright (c) 2026 huggy
+  MIT
+  MMT/TLV support (v0.2.0 plus the pinned patches).
+
+* nv-codec-headers — https://github.com/FFmpeg/nv-codec-headers
+  Copyright (C) FFmpeg/nv-codec-headers contributors
+  MIT (headers only, NVDEC builds).
+
+The whole tool is redistributed under GPL-3.0-or-later as required by the
+"or any later version" terms of the GPLv2+ components above.

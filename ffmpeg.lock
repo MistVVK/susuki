@@ -1,0 +1,40 @@
+# ffmpeg.lock - 専用FFmpegビルドの固定参照 (設計書 §10.2 再現ビルド用)
+# 名前は実装時に固定: このファイル (ffmpeg.lock) を採用。
+
+FFMPEG_REPO=https://github.com/FFmpeg/FFmpeg
+FFMPEG_VERSION=8.1.2
+FFMPEG_TAG=n8.1.2
+FFMPEG_COMMIT=38b88335f99e76ed89ff3c93f877fdefce736c13
+
+LIBARIBTLV_REPO=https://github.com/makeding/libaribtlv
+LIBARIBTLV_VERSION=0.2.0
+LIBARIBTLV_TAG=v0.2.0
+LIBARIBTLV_COMMIT=91bafe32479141c660a334cc03aed1f9869a18a5
+
+# REF-FFMPEG-TLV (makeding/ffmpeg-libaribtlv) 29cc14822fae9cb8cd06bbfdd584d06aa7a6a1fa の
+# patches/ffmpeg-8.1.2 を vendor/patches/ffmpeg-8.1.2 に複製し SHA256 固定 (設計 §10.2)
+PATCH0001_SHA256=1b2b006231f03c0c79eaa6d38fbf07e87c862da3139a311ed4b4aa33be8a8401
+PATCH0002_SHA256=1ffa1e7364c52caa938034184dab483224c568deac8f2e0dc4c3f45a4bcb781b
+PATCH0003_SHA256=50c319d2c1f2f142e3865ef5a2e24d64d1361d0145cf3d413c3ea6377f1566d5
+
+# ffnvcodec ヘッダ (NVDEC ビルド時依存、MIT で DFSG フリー、CUDA Toolkit 非依存 §10.7)
+NVCODEC_REPO=https://github.com/FFmpeg/nv-codec-headers
+NVCODEC_TAG=n13.0.19.0
+NVCODEC_COMMIT=e844e5b26f46bb77479f063029595293aa8f812d
+
+# Windows クロスビルド (TARGET_OS=windows) でのみ使う圧縮ライブラリ。Linux は
+# ディストリビューションの開発パッケージを使う。いずれも静的に FFmpeg DLL へ組み込む
+# zlib: Zlib ライセンス / bzip2: BSD 系 (bzip2 license) / xz の liblzma: 0BSD
+ZLIB_REPO=https://github.com/madler/zlib
+ZLIB_TAG=v1.3.2
+ZLIB_COMMIT=da607da739fa6047df13e66a2af6b8bec7c2a498
+
+BZIP2_REPO=https://sourceware.org/git/bzip2.git
+BZIP2_TAG=bzip2-1.0.8
+BZIP2_COMMIT=6a8690fc8d26c815e798c588f796eabe9d684cf0
+
+XZ_REPO=https://github.com/tukaani-project/xz
+XZ_TAG=v5.8.4
+XZ_COMMIT=d3e650e63c110e830fd5391e7f8b45df0b91d3da
+
+RELEASE_TAG=8.1.2-snapshot-0.2.0

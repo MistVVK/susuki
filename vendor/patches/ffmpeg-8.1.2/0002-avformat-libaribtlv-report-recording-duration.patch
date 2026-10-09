@@ -1,0 +1,137 @@
+From c02b27d5c112c10e5583465d97c53dc3c1712202 Mon Sep 17 00:00:00 2001
+From: huggy <i@huggy.moe>
+Date: Tue, 11 Aug 2026 16:28:07 +0900
+Subject: [PATCH 2/2] avformat/libaribtlv: report recording duration
+
+---
+ configure                |  2 +-
+ libavformat/libaribtlv.c | 86 ++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 87 insertions(+), 1 deletion(-)
+
+diff --git a/configure b/configure
+index b426549..4f692c0 100755
+--- a/configure
++++ b/configure
+@@ -7241,7 +7241,7 @@ enabled libaribb24        && { check_pkg_config libaribb24 "aribb24 > 1.0.3" "ar
+                                { enabled gpl && require_pkg_config libaribb24 aribb24 "aribb24/aribb24.h" arib_instance_new; } ||
+                                die "ERROR: libaribb24 requires version higher than 1.0.3 or --enable-gpl."; }
+ enabled libaribcaption    && require_pkg_config libaribcaption "libaribcaption >= 1.1.1" "aribcaption/aribcaption.h" aribcc_context_alloc
+-enabled libaribtlv        && require_pkg_config libaribtlv "libaribtlv >= 0.1.1" "aribtlv/aribtlv.h" aribtlv_version
++enabled libaribtlv        && require_pkg_config libaribtlv "libaribtlv >= 0.2.0" "aribtlv/aribtlv.h" aribtlv_duration_probe_create
+ enabled lv2               && require_pkg_config lv2 lilv-0 "lilv/lilv.h" lilv_world_new
+ enabled libiec61883       && require libiec61883 libiec61883/iec61883.h iec61883_cmp_connect -lraw1394 -lavc1394 -lrom1394 -liec61883
+ enabled libass            && require_pkg_config libass "libass >= 0.11.0" ass/ass.h ass_library_init
+diff --git a/libavformat/libaribtlv.c b/libavformat/libaribtlv.c
+index 883aaa2..3da1248 100644
+--- a/libavformat/libaribtlv.c
++++ b/libavformat/libaribtlv.c
+@@ -129,6 +129,9 @@ static void libaribtlv_on_track(void *opaque, const aribtlv_track_info *track)
+     st->codecpar->codec_id   = libaribtlv_codec_id(track->codec);
+     st->codecpar->codec_tag  = 0;
+     avpriv_set_pts_info(st, 64, 1, track->timescale ? track->timescale : 1);
++    if (ctx->format->duration != AV_NOPTS_VALUE)
++        st->duration = av_rescale_q(ctx->format->duration, AV_TIME_BASE_Q,
++                                    st->time_base);
+ 
+     if (track->language && track->language[0])
+         av_dict_set(&st->metadata, "language", track->language, 0);
+@@ -286,6 +289,88 @@ static int libaribtlv_probe(const AVProbeData *p)
+     return 0;
+ }
+ 
++static void libaribtlv_probe_duration(AVFormatContext *s)
++{
++    aribtlv_duration_probe_options options;
++    aribtlv_duration_probe *probe = NULL;
++    aribtlv_range_request request;
++    aribtlv_duration_info duration;
++    uint8_t *buffer = NULL;
++    int64_t source_size;
++    int64_t restore_offset;
++    int ret;
++
++    if (!(s->pb->seekable & AVIO_SEEKABLE_NORMAL))
++        return;
++    source_size = avio_size(s->pb);
++    restore_offset = avio_tell(s->pb);
++    if (source_size <= 0 || restore_offset < 0)
++        return;
++
++    probe = aribtlv_duration_probe_create();
++    buffer = av_malloc(ARIBTLV_READ_SIZE);
++    if (!probe || !buffer)
++        goto done;
++    aribtlv_duration_probe_options_init(&options);
++    if (aribtlv_duration_probe_begin(probe, source_size, &options) < 0)
++        goto done;
++
++    while (aribtlv_duration_probe_get_state(probe) ==
++           ARIBTLV_DURATION_PROBE_NEED_RANGE) {
++        uint64_t absolute_offset;
++        uint64_t remaining;
++
++        ret = aribtlv_duration_probe_next_range(probe, &request);
++        if (ret != 1 || request.offset > INT64_MAX || request.length > INT64_MAX ||
++            request.offset > (uint64_t)source_size ||
++            request.length > (uint64_t)source_size - request.offset) {
++            break;
++        }
++        if (avio_seek(s->pb, request.offset, SEEK_SET) < 0) {
++            aribtlv_duration_probe_fail_range(probe, request.request_id);
++            break;
++        }
++
++        absolute_offset = request.offset;
++        remaining = request.length;
++        while (remaining) {
++            int chunk = FFMIN(remaining, (uint64_t)ARIBTLV_READ_SIZE);
++            int bytes_read;
++
++            bytes_read = avio_read(s->pb, buffer, chunk);
++            if (bytes_read <= 0) {
++                aribtlv_duration_probe_fail_range(probe, request.request_id);
++                remaining = 0;
++                break;
++            }
++            remaining -= bytes_read;
++            ret = aribtlv_duration_probe_push_range(probe, request.request_id,
++                                                    absolute_offset, buffer,
++                                                    bytes_read,
++                                                    remaining == 0);
++            if (ret < 0) {
++                remaining = 0;
++                break;
++            }
++            absolute_offset += bytes_read;
++        }
++    }
++
++    if (aribtlv_duration_probe_get_state(probe) == ARIBTLV_DURATION_PROBE_COMPLETE &&
++        aribtlv_duration_probe_get_duration(probe, &duration) == ARIBTLV_OK &&
++        duration.status == ARIBTLV_DURATION_COMPLETE && duration.value.timescale &&
++        duration.value.timescale <= INT_MAX) {
++        s->duration = av_rescale_q(duration.value.value,
++                                  (AVRational){ 1, duration.value.timescale },
++                                  AV_TIME_BASE_Q);
++    }
++
++done:
++    av_free(buffer);
++    aribtlv_duration_probe_destroy(probe);
++    avio_seek(s->pb, restore_offset, SEEK_SET);
++}
++
+ static int libaribtlv_read_header(AVFormatContext *s)
+ {
+     LibaribtlvContext *ctx = s->priv_data;
+@@ -295,6 +380,7 @@ static int libaribtlv_read_header(AVFormatContext *s)
+     int ret;
+ 
+     ctx->format = s;
++    libaribtlv_probe_duration(s);
+     aribtlv_callbacks_init(&callbacks);
+     callbacks.on_track = libaribtlv_on_track;
+     callbacks.on_track_removed = libaribtlv_on_track_removed;
+-- 
+2.55.0
+
