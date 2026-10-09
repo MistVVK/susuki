@@ -57,6 +57,9 @@ shellcheck scripts/package-deb.sh
 shellcheck scripts/deb-build-in-container.sh
 shellcheck scripts/package-windows.sh
 shellcheck scripts/windows-build-in-container.sh
+shellcheck scripts/release-assets.sh
+shellcheck scripts/release-push.sh
+shellcheck scripts/release.sh
 ```
 
 Windows 向けのコード (`cfg(windows)`) を変更した場合は、Windows ターゲットの Clippy も実行する。
