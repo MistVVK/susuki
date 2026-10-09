@@ -1,0 +1,11 @@
+[package]
+name = "susuki-logo-file"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "susuki internal component crate"
+
+[dependencies]
+# CP932 name decoding (design 3.3 / appendix A.3)
+encoding_rs = "0.8"
