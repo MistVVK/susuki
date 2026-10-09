@@ -9,7 +9,7 @@ FFmpeg をデコード基盤として単一バイナリに統合・再実装し�
 
 ## インストール (Debian / Ubuntu)
 
-リリースに、対応ディストリビューションごとの deb パッケージ (amd64) を置いています。
+[リリース](https://github.com/MistVVK/susuki/releases)に、対応ディストリビューションごとの deb パッケージ (amd64) を置いています。
 使っているディストリビューションに合うものを選んでください。
 
 | ディストリビューション | パッケージ名の末尾 |
@@ -23,7 +23,7 @@ FFmpeg をデコード基盤として単一バイナリに統合・再実装し�
 パス指定の `./` を付けると、必要な依存パッケージ (libva など) も一緒に入ります。
 
 ```sh
-sudo apt install ./susuki_0.1.0-1~noble_amd64.deb
+sudo apt install ./susuki_<バージョン>-1~noble_amd64.deb
 susuki --help
 ```
 
@@ -40,7 +40,7 @@ susuki --help
 
 ## インストール (Windows)
 
-リリースの `susuki-<バージョン>-windows-x86_64.7z` (Windows 10 以降の x64) を任意の
+[リリース](https://github.com/MistVVK/susuki/releases)の `susuki-<バージョン>-windows-x86_64.7z` (Windows 10 以降の x64) を任意の
 フォルダに展開し (7-Zip などで展開できます)、その中の `susuki.exe` を実行します。インストーラはありません。
 
 ```bat
@@ -117,6 +117,17 @@ SUSUKI_FFMPEG_PREFIX="$PWD/dist/ffmpeg-windows" \
 
 Windows 用の専用 FFmpeg は、GPU デコードを D3D11VA のみにし、zlib・bzip2・xz を
 `ffmpeg.lock` の固定 commit から静的に組み込みます。
+
+### リリース
+
+リリースの手順は `.agents/skills/release/SKILL.md` にまとめています。配布物をビルドしたあと、
+次のスクリプトで公開します (`main` ブランチで実行します)。
+
+```sh
+./scripts/release-assets.sh        # 配布物を dist/release/v<バージョン>/ にまとめ、同じコミットからのビルドか検査
+./scripts/release-push.sh          # タグを作り、公開するコミットを検査 (--push で main とタグを push)
+./scripts/release.sh               # gh で GitHub Releases に公開
+```
 
 ## 使い方
 
