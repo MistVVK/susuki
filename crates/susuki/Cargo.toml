@@ -1,0 +1,13 @@
+[package]
+name = "susuki"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "CM interval detection CLI (standalone, FFmpeg-based)"
+
+[dependencies]
+susuki-core.workspace = true
+susuki-decode.workspace = true
+susuki-logo-file.workspace = true
+encoding_rs = "0.8"

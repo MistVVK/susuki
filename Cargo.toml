@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/susuki",
     "crates/susuki-core",
     "crates/susuki-decode",
     "crates/susuki-logo-file",
