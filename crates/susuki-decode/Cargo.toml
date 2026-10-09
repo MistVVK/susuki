@@ -1,0 +1,20 @@
+[package]
+name = "susuki-decode"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "susuki internal component crate"
+
+[target.'cfg(unix)'.dependencies]
+# NVDEC existence probe (cuInit / cuDeviceGetCount via dlopen of libcuda; design 4.3).
+# libloading is ISC (DFSG free, design 10.7).
+libloading = "0.8"
+
+[target.'cfg(windows)'.dependencies]
+# D3D11VA existence probe (DXGI adapter enumeration; design 4.3). Same version
+# wgpu already pulls in on Windows. MIT OR Apache-2.0 (DFSG free, design 10.7).
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Dxgi"] }
+[build-dependencies]
+bindgen = "0.72"
+cc = "1"
