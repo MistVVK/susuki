@@ -1,0 +1,12 @@
+[package]
+name = "susuki-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "susuki internal component crate"
+
+[dependencies]
+susuki-logo-file.workspace = true
+wgpu.workspace = true
+pollster.workspace = true

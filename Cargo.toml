@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/susuki-core",
     "crates/susuki-decode",
     "crates/susuki-logo-file",
 ]
@@ -12,6 +13,9 @@ rust-version = "1.85"
 license = "GPL-3.0-or-later"
 
 [workspace.dependencies]
+wgpu = "25"
+pollster = "0.4"
+susuki-core = { path = "crates/susuki-core" }
 susuki-decode = { path = "crates/susuki-decode" }
 susuki-logo-file = { path = "crates/susuki-logo-file" }
 
