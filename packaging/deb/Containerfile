@@ -1,0 +1,22 @@
+# Build environment for scripts/package-deb.sh: toolchain only, no sources.
+# One image per target distribution, selected by BASE.
+ARG BASE
+FROM ${BASE}
+
+ARG RUST_VERSION
+ENV DEBIAN_FRONTEND=noninteractive \
+    RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential git cmake pkg-config nasm libclang-dev \
+        zlib1g-dev libbz2-dev liblzma-dev libva-dev \
+        curl ca-certificates dpkg-dev file \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN test -n "$RUST_VERSION" \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION" \
+    && rustc --version && cargo --version
