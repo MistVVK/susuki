@@ -1492,8 +1492,17 @@ pub fn areasummary_getloc(hist: &[i64; 256], st: i64, ed: i64) -> (i64, i64, i64
     let mut val_num = 0i64;
     let mut val_data = 0i64;
     for i in 0..7i64 {
+        // The C reference reads hist_clip[ind_avg5 + i - 2] verbatim, which reaches
+        // index 11 — one past the 11-element array — when ind_avg5 == 7 and i == 6
+        // (latent UB that happened to read adjacent stack memory). Define the
+        // out-of-window read as 0, consistent with the zero-padding of positions
+        // outside the window above, instead of panicking.
         let val = (hist_clip[(ind_avg5 + i - 3) as usize] * (16 - loc_avg5_mod)
-            + hist_clip[(ind_avg5 + i - 2) as usize] * loc_avg5_mod
+            + hist_clip
+                .get((ind_avg5 + i - 2) as usize)
+                .copied()
+                .unwrap_or(0)
+                * loc_avg5_mod
             + 8)
             / 16;
         let mul = match i {
