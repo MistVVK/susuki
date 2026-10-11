@@ -31,6 +31,10 @@ pub struct InputSpec {
     pub audio_abs: Option<i32>,
     pub audio_none: bool,
     pub tlv_service: Option<i64>,
+    /// Opt-in ffmpeg-CLI-like tolerance: per-packet decode errors on
+    /// send/receive are counted and skipped instead of aborting the run
+    /// (design §4.4 keeps fatal behavior as the default).
+    pub tolerate_decode_errors: bool,
 }
 
 /// Metadata for JSON input/decode blocks (§9.2) and §4.5 selection reasons.
@@ -141,6 +145,8 @@ pub struct DecoderEngine {
     draining: bool,
     video_done: bool,
     audio_done: bool,
+    tolerate_decode_errors: bool,
+    decode_errors_skipped: u64,
 }
 
 unsafe impl Send for DecoderEngine {}
@@ -465,6 +471,8 @@ impl DecoderEngine {
             draining: false,
             video_done: false,
             audio_done: audio_index.is_none(),
+            tolerate_decode_errors: spec.tolerate_decode_errors,
+            decode_errors_skipped: 0,
         })
     }
 
@@ -526,6 +534,13 @@ impl DecoderEngine {
     fn pump_video(&mut self, pkt: *mut sys::AVPacket) -> Result<bool, DecodeError> {
         let rc = unsafe { sys::avcodec_send_packet(self.vdec, pkt) };
         if rc < 0 && rc != sys::averror_eagain() && rc != sys::averror_eof() {
+            if self.tolerate_decode_errors {
+                // Broadcast captures contain corrupt packets; ffmpeg CLI
+                // reports, skips, and keeps decoding. Mirror that so one bad
+                // packet cannot abort a long analysis.
+                self.note_decode_error("video", "send", rc);
+                return Ok(false);
+            }
             return Err(DecodeError::Runtime(format!(
                 "avcodec_send_packet(video): {}",
                 sys::err_str(rc)
@@ -547,6 +562,10 @@ impl DecoderEngine {
                 break;
             } else if rc < 0 {
                 unsafe { sys::av_frame_free(&mut frame) };
+                if self.tolerate_decode_errors {
+                    self.note_decode_error("video", "receive", rc);
+                    break;
+                }
                 // §4.4: decode-time errors are never classified as unsupported -> 5
                 return Err(DecodeError::Runtime(format!(
                     "avcodec_receive_frame(video): {}",
@@ -567,6 +586,12 @@ impl DecoderEngine {
         };
         let rc = unsafe { sys::avcodec_send_packet(adec, pkt) };
         if rc < 0 && rc != sys::averror_eagain() && rc != sys::averror_eof() {
+            if self.tolerate_decode_errors {
+                // Same tolerance as pump_video: one corrupt audio packet
+                // (common in broadcast captures) must not abort the run.
+                self.note_decode_error("audio", "send", rc);
+                return Ok(false);
+            }
             return Err(DecodeError::Runtime(format!(
                 "avcodec_send_packet(audio): {}",
                 sys::err_str(rc)
@@ -588,6 +613,10 @@ impl DecoderEngine {
                 break;
             } else if rc < 0 {
                 unsafe { sys::av_frame_free(&mut frame) };
+                if self.tolerate_decode_errors {
+                    self.note_decode_error("audio", "receive", rc);
+                    break;
+                }
                 return Err(DecodeError::Runtime(format!(
                     "avcodec_receive_frame(audio): {}",
                     sys::err_str(rc)
@@ -598,6 +627,26 @@ impl DecoderEngine {
             self.queued.push_back(FrameEvent::Audio(chunk?));
         }
         Ok(eof)
+    }
+
+    /// Count a skipped decode error under --tolerate-decode-errors. The first
+    /// error is reported on stderr; later ones are counted silently so long
+    /// captures with many corrupt packets stay readable.
+    fn note_decode_error(&mut self, stream: &str, phase: &str, rc: i32) {
+        if self.decode_errors_skipped == 0 {
+            eprintln!(
+                "susuki: skipping {} decode error ({}): {}; later errors are counted silently",
+                stream,
+                phase,
+                sys::err_str(rc)
+            );
+        }
+        self.decode_errors_skipped += 1;
+    }
+
+    /// Number of decode errors skipped because --tolerate-decode-errors was given.
+    pub fn decode_errors_skipped(&self) -> u64 {
+        self.decode_errors_skipped
     }
 
     /// §4.2 hw->system transfer + §6.0 luma + §5.1 sequential index.

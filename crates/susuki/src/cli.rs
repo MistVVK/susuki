@@ -63,6 +63,8 @@ pub struct DecodeConfig {
     pub video_stream: Option<StreamSel>,
     pub audio_stream: Option<AudioStreamSel>,
     pub tlv_service: Option<i64>,
+    /// --tolerate-decode-errors: skip per-packet decode errors instead of aborting
+    pub tolerate_decode_errors: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -306,6 +308,15 @@ where
                 p.mark_once("--tlv-service")?;
                 let val = take_value(flag, inline, &mut it)?;
                 p.opts.decode.tlv_service = Some(parse_int(&val, "--tlv-service")?);
+            }
+            "--tolerate-decode-errors" => {
+                if inline.is_some() {
+                    return Err(ArgError(
+                        "--tolerate-decode-errors takes no value".to_string(),
+                    ));
+                }
+                p.mark_once("--tolerate-decode-errors")?;
+                p.opts.decode.tolerate_decode_errors = true;
             }
             "--backend" => {
                 p.mark_once("--backend")?;

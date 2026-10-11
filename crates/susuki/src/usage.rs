@@ -29,6 +29,7 @@ DECODE OPTIONS:
             $device,
             r#"
     --analysis-backend NAME      auto|cpu|gpu (analysis compute, see design 6.5)
+    --tolerate-decode-errors     skip corrupt packets (decode errors) instead of aborting
 
 SCENE PARAMETERS (chapter_exe derived):
     --mute-threshold N           mute amplitude threshold 1..32767 (default: 50)

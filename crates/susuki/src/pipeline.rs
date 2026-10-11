@@ -243,6 +243,7 @@ fn spec_from_cli(opts: &Options) -> InputSpec {
         audio_abs: None,
         audio_none: false,
         tlv_service: opts.decode.tlv_service,
+        tolerate_decode_errors: opts.decode.tolerate_decode_errors,
     };
     match opts.decode.video_stream {
         Some(StreamSel::Ordinal(n)) => spec.video_ordinal = Some(n),
@@ -597,6 +598,7 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
         backend: engine.backend,
         gpu_unsupported: engine.gpu_unsupported,
         fallback_reason: engine.fallback_reason.clone(),
+        decode_errors_skipped: engine.decode_errors_skipped(),
     };
     let code = write_outputs(
         opts,
@@ -640,6 +642,9 @@ fn write_outputs(
     }
     if logo_results.merged.num_find == 0 && !opts.logo.disabled {
         warnings.push("no_logo_detected");
+    }
+    if decode.decode_errors_skipped > 0 {
+        warnings.push("decode_errors_skipped");
     }
 
     let scene_changes: Vec<(i64, bool)> = {
@@ -830,4 +835,5 @@ struct DecodeMeta {
     backend: BackendKind,
     gpu_unsupported: bool,
     fallback_reason: Option<String>,
+    decode_errors_skipped: u64,
 }
