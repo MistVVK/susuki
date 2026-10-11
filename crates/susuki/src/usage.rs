@@ -19,7 +19,8 @@ INPUT OPTIONS:
     --script PATH                JLS script (default: embedded standard script)
     --video-stream SPEC          v:N (0-based video ordinal) or absolute stream index
     --audio-stream SPEC          a:N, absolute index, or none (disables mute detection)
-    --tlv-service N              service_id to analyze in TLV/MMT input
+    --tlv-service N              context id of the TLV compression IP to analyze in TLV/MMT
+                                 input (not the MMT-SI service_id); omit for all contexts
 
 DECODE OPTIONS:
     --backend NAME               "#,
