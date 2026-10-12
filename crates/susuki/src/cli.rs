@@ -65,6 +65,9 @@ pub struct DecodeConfig {
     pub tlv_service: Option<i64>,
     /// --tolerate-decode-errors: skip per-packet decode errors instead of aborting
     pub tolerate_decode_errors: bool,
+    /// --expected-duration: 期待される番組尺 (秒)。映像パケットが先に枯れた録画でも
+    /// 解析タイムラインを期待尺まで延ばし、音声だけで続く後半の CM を検出できるようにする。
+    pub expected_duration: Option<f64>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -308,6 +311,18 @@ where
                 p.mark_once("--tlv-service")?;
                 let val = take_value(flag, inline, &mut it)?;
                 p.opts.decode.tlv_service = Some(parse_int(&val, "--tlv-service")?);
+            }
+            "--expected-duration" => {
+                p.mark_once("--expected-duration")?;
+                let val = take_value(flag, inline, &mut it)?;
+                let sec = parse_float(&val, "--expected-duration")?;
+                // NaN・負・0 は受理しない (NaN は比較ではなく is_nan で判定する)
+                if sec.is_nan() || sec <= 0.0 {
+                    return Err(ArgError(format!(
+                        "option --expected-duration: must be positive, got {sec}"
+                    )));
+                }
+                p.opts.decode.expected_duration = Some(sec);
             }
             "--tolerate-decode-errors" => {
                 if inline.is_some() {

@@ -96,6 +96,11 @@ const SPACE_SC2: i32 = 10;
 const SPACE_SC3: i32 = 30;
 const THRES_RATE1: i32 = 300;
 const THRES_RATE2: i32 = 7;
+/// card-32: 映像データが存在しない区間の rate。still 判定 (rate < THRES_RATE2) には
+/// 入れないが、シーンチェンジ主張 (rate >= RATE_SCENE_CHANGE) もしない不明値。
+/// REF chapter_exe は音声尺まで延長した AviSynth クリップを読み、映像枯渇後も
+/// still でないレコードを JLS へ渡すため、その実効入力に合わせる。
+const RATE_SC_VIDEO_ABSENT: i32 = 8;
 
 /// Persistent state across mute intervals (reference lastmute_scpos /
 /// lastmute_marker / idx).
@@ -115,6 +120,31 @@ impl SceneState {
             idx: 1,
             records: Vec::new(),
         }
+    }
+
+    /// card-32: 映像が存在しない mute 区間 (--expected-duration で音声尺までタイムラインを
+    /// 延ばした、映像パケットが枯渇した後の区間) のシーンレコードを 1 本だけ追加する。
+    ///
+    /// 映像特徴量が得られないため REF の候補選択ロジック (proc_scene_change) は実行しない。
+    /// mute 区間は音声の実測 evidence なので、無音が終わる終了点を構成境界として登録する。
+    /// 終了点を選ぶ理由: JLS は最後の構成境界から末尾までの短い構成を CM と判断する。
+    /// 開始点に置くと映像枯渇後の末尾構成が長くなり、baseline と同じ末尾 CM を検出できない。
+    /// still (映像が不変) は主張しない。chapter_exe は音声尺まで延長した AviSynth
+    /// クリップを読み、映像枯渇後も still でないレコードを JLS へ渡すため、その実効入力に
+    /// 合わせる。レコードは mute 1 本につき 1 件で、擬似特徴量からは生成しない。
+    pub fn append_video_absent_segment(&mut self, start_fr: i32, seri: i32) {
+        let position = start_fr + seri - 1;
+        self.records.push(ScRecord {
+            chapter_frame: position,
+            seri,
+            pos_sc: position,
+            pos_bk: (position - 1).max(0),
+            mute_start_fr: start_fr,
+            mute_end_fr: start_fr + seri,
+            still: false,
+            mark: "",
+            rate_sc: 0,
+        });
     }
 
     /// REF chapter_exe appends `# SCPos:n-1 n-1` even without mute records.
@@ -510,12 +540,16 @@ fn pair_feat(feats: &[Option<PairFeat>], x: i32) -> PairFeat {
         };
     }
     feats.get(x as usize).and_then(|o| *o).unwrap_or({
-        // features must cover the processed range; fall back to "no change"
+        // card-32: mute 区間が復号済み映像の終端を跨ぐ場合にだけここへ来る (区間全体が
+        // 映像外の mute は append_video_absent_segment が処理する)。「映像情報なし」を
+        // still (不変) と報告してはならない。シーンチェンジ主張 (flag_sc) は行わず、
+        // rate は still 判定閾値 (THRES_RATE2) 以上の不明値として、chapter_exe が音声尺
+        // 延長クリップで実効的に JLS へ渡す区間と同じ「still でない構成境界」として扱う。
         PairFeat {
             mvec1: 1,
             mvec2: 1,
             flag_sc: 0,
-            rate_sc: 0,
+            rate_sc: RATE_SC_VIDEO_ABSENT,
         }
     })
 }
@@ -643,6 +677,13 @@ impl MuteDetector {
         } else {
             self.seri += 1;
         }
+    }
+
+    /// 音声が実際に覆ったフレーム窓数。
+    /// card-32: `--expected-duration` で解析タイムラインを延ばす際、期待尺より長い
+    /// 実データ (音声のみ後半が続く録画) を切り捨てないための上限材料として使う。
+    pub fn frames_evaluated(&self) -> i32 {
+        self.done
     }
 
     /// close evaluation at the batch loop bound `total_frames - setseri - 1`;

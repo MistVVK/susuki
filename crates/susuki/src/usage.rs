@@ -21,6 +21,8 @@ INPUT OPTIONS:
     --audio-stream SPEC          a:N, absolute index, or none (disables mute detection)
     --tlv-service N              context id of the TLV compression IP to analyze in TLV/MMT
                                  input (not the MMT-SI service_id); omit for all contexts
+    --expected-duration SEC      expected program duration in seconds (decimals allowed);
+                                 extends the analysis timeline when the video ends early
 
 DECODE OPTIONS:
     --backend NAME               "#,

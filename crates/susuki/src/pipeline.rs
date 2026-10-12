@@ -310,6 +310,48 @@ pub enum ScriptSrc {
 const EMBEDDED_STD_NAME: &[u8] = b"@EMBEDDED_STD";
 const STD_SCRIPT_BYTES: &[u8] = include_bytes!("../resources/JL_標準.txt");
 
+/// card-32 設計論点1/3/5: 解析タイムラインのフレーム枠を決める。
+///
+/// - `--expected-duration` 未指定なら復号済み映像フレーム数のまま (完全後方互換)。
+/// - 指定時は「復号済み映像フレーム数」「期待尺から換算した枠」「音声が実際に覆った枠」
+///   の最大値を採用する。期待尺を超える実データを切り捨てない (過剰延長しない) ため。
+/// - 期待尺のフレーム換算はナノ秒精度の有理数に展開し i128 で ceil を取る。f64 は
+///   入力受付に使い、枠の丸めを浮動小数点へ委ねない。
+fn timeline_frames(
+    video_frames: i64,
+    expected_duration: Option<f64>,
+    audio_frames: i64,
+    fps_num: i64,
+    fps_d: i64,
+) -> Result<i64, (String, u8)> {
+    let Some(expected_sec) = expected_duration else {
+        return Ok(video_frames);
+    };
+    // フレームレートが不定なら期待尺換算は行わず、既存の TimeConverter 失敗 (終了コード4) に委ねる。
+    if fps_num <= 0 || fps_d <= 0 {
+        return Ok(video_frames.max(audio_frames));
+    }
+    let nanos_f = expected_sec * 1_000_000_000.0;
+    if !nanos_f.is_finite() || nanos_f > i128::from(i32::MAX) as f64 * 1_000_000_000.0 {
+        return Err((
+            "--expected-duration is beyond the supported frame axis".to_string(),
+            2u8,
+        ));
+    }
+    let nanos = nanos_f.round() as i128;
+    let numerator = nanos * i128::from(fps_num);
+    let denominator = i128::from(fps_d) * 1_000_000_000i128;
+    let remainder = numerator % denominator;
+    let frames = numerator.div_euclid(denominator) + i128::from(remainder != 0);
+    if frames > i128::from(i32::MAX) {
+        return Err((
+            "--expected-duration exceeds the supported frame count".to_string(),
+            2u8,
+        ));
+    }
+    Ok(video_frames.max(frames as i64).max(audio_frames))
+}
+
 fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
     let mut logos = crate::logo::LogoRunner::new(&opts.logo)?;
     // ---- script resolution + static forbid check (§7.5) ----
@@ -450,6 +492,17 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
     if total_frames <= 0 {
         return Err(("no video frames decoded".to_string(), 5u8));
     }
+    // card-32: 以降の mute 閉塞・scene・JLS・出力はタイムライン枠を基準に動かす。
+    // 未指定時は video_frames と同値なので、既存の完走ケース出力は変わらない。
+    let video_frames = total_frames;
+    let audio_frames = i64::from(mutedet.frames_evaluated());
+    let total_frames = timeline_frames(
+        video_frames,
+        opts.decode.expected_duration,
+        audio_frames,
+        info.fps_num,
+        info.fps_den,
+    )?;
     let lx = runner.lx;
     let ly = runner.ly;
     let feats = std::mem::take(&mut runner.feats);
@@ -459,6 +512,13 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
     let mut scene = SceneState::new();
     let intervals = mutedet.finish(total_frames as i32);
     for iv in &intervals {
+        // card-32: mute 区間が復号済み映像の外にある (映像パケットが先に枯れた) 場合は
+        // 映像特徴量が存在しない。REF の候補選択ロジックへ擬似特徴量を流すと記録が
+        // 増えすぎるため、区間 1 本を 1 レコードで「映像情報なし」として登録する。
+        if iv.start_fr >= video_frames as i32 {
+            scene.append_video_absent_segment(iv.start_fr, iv.len);
+            continue;
+        }
         scene.process_segment(
             &feats,
             total_frames as i32,
