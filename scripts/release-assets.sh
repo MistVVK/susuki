@@ -49,7 +49,8 @@ OUT="$ROOT/dist/release/$TAG"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 for d in "${DISTS[@]}"; do
-    cp "$ROOT/dist/deb/$d/susuki_${VERSION}-1~${d}_amd64.deb" "$OUT/"
+    # GitHub replaces ~ with . in asset names; checksum the downloadable name.
+    cp "$ROOT/dist/deb/$d/susuki_${VERSION}-1~${d}_amd64.deb" "$OUT/susuki_${VERSION}-1.${d}_amd64.deb"
     cp "$ROOT/dist/deb/$d/build-info.txt" "$OUT/build-info-$d.txt"
 done
 cp "$ROOT/dist/windows/$WIN_NAME" "$OUT/"
@@ -65,13 +66,13 @@ win_info="$OUT/build-info-windows.txt"
     echo "| 対象 | ファイル |"
     echo "|------|----------|"
     for d in "${DISTS[@]}"; do
-        echo "| ${DIST_NAMES[$d]} (amd64) | \`susuki_${VERSION}-1~${d}_amd64.deb\` |"
+        echo "| ${DIST_NAMES[$d]} (amd64) | \`susuki_${VERSION}-1.${d}_amd64.deb\` |"
     done
     echo "| Windows 10 以降 (x64) | \`$WIN_NAME\` |"
     echo
     echo "## インストール"
     echo
-    echo "- Debian / Ubuntu: \`sudo apt install ./susuki_${VERSION}-1~<ディストリ>_amd64.deb\`"
+    echo "- Debian / Ubuntu: \`sudo apt install ./susuki_${VERSION}-1.<ディストリ>_amd64.deb\`"
     echo "- Windows: 7z を任意のフォルダに展開し、\`susuki.exe\` を実行する (DLL は exe と同じフォルダに置いたままにする)"
     echo
     echo "詳しくは [Readme](https://github.com/MistVVK/susuki/blob/$TAG/Readme.md) を参照してください。"

@@ -14,16 +14,16 @@ FFmpeg をデコード基盤として単一バイナリに統合・再実装し�
 
 | ディストリビューション | パッケージ名の末尾 |
 |------------------------|--------------------|
-| Ubuntu 22.04 LTS | `~jammy_amd64.deb` |
-| Ubuntu 24.04 LTS | `~noble_amd64.deb` |
-| Ubuntu 26.04 LTS | `~resolute_amd64.deb` |
-| Debian 13 | `~trixie_amd64.deb` |
+| Ubuntu 22.04 LTS | `.jammy_amd64.deb` |
+| Ubuntu 24.04 LTS | `.noble_amd64.deb` |
+| Ubuntu 26.04 LTS | `.resolute_amd64.deb` |
+| Debian 13 | `.trixie_amd64.deb` |
 
 ダウンロードしたファイルを `apt` でインストールします (例は Ubuntu 24.04)。
 パス指定の `./` を付けると、必要な依存パッケージ (libva など) も一緒に入ります。
 
 ```sh
-sudo apt install ./susuki_<バージョン>-1~noble_amd64.deb
+sudo apt install ./susuki_<バージョン>-1.noble_amd64.deb
 susuki --help
 ```
 
