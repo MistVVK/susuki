@@ -243,6 +243,7 @@ fn spec_from_cli(opts: &Options) -> InputSpec {
         audio_abs: None,
         audio_none: false,
         tlv_service: opts.decode.tlv_service,
+        mpegts_service: opts.decode.mpegts_service,
         tolerate_decode_errors: opts.decode.tolerate_decode_errors,
     };
     match opts.decode.video_stream {
@@ -738,6 +739,7 @@ fn write_outputs(
         video_stream_id: info.video_stream_id,
         audio_stream_id: info.audio_stream_id,
         tlv_service: opts.decode.tlv_service,
+        mpegts_service: opts.decode.mpegts_service,
         backend: match decode.backend {
             BackendKind::Cpu => "cpu",
             BackendKind::Nvdec => "nvdec",

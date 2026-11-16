@@ -31,6 +31,7 @@ pub struct InputSpec {
     pub audio_abs: Option<i32>,
     pub audio_none: bool,
     pub tlv_service: Option<i64>,
+    pub mpegts_service: Option<i64>,
     /// Opt-in ffmpeg-CLI-like tolerance: per-packet decode errors on
     /// send/receive are counted and skipped instead of aborting the run
     /// (design §4.4 keeps fatal behavior as the default).
@@ -144,6 +145,8 @@ pub struct DecoderEngine {
     pub fallback_reason: Option<String>,
     video_index: i32,
     audio_index: Option<i32>,
+    /// 初回に選択した TS program。以後の PMT 変更で誤った PID を解析しない。
+    mpegts_program: Option<MPEGTSProgram>,
     frame_index: i64,
     interrupt: Arc<AtomicBool>,
     queued: VecDeque<FrameEvent>,
@@ -316,11 +319,25 @@ impl DecoderEngine {
             ));
         }
 
+        // 異なるサービスの PID を組み合わせないよう、同一 program の stream に限定する。
+        let mpegts_program = match spec.mpegts_service {
+            Some(service) => match select_mpegts_program(fmt, service) {
+                Ok(streams) => Some(streams),
+                Err(error) => {
+                    unsafe { cleanup_live(fmt, iobuf, io_ptr) };
+                    return Err(error);
+                }
+            },
+            None => None,
+        };
         let video_index: i32 = match select_stream(
             fmt,
             spec.video_ordinal,
             spec.video_abs,
             sys::AVMediaType_AVMEDIA_TYPE_VIDEO,
+            mpegts_program
+                .as_ref()
+                .map(|program| program.streams.as_slice()),
         ) {
             Ok(Some(x)) => x,
             Ok(None) => {
@@ -340,6 +357,9 @@ impl DecoderEngine {
                 spec.audio_ordinal,
                 spec.audio_abs,
                 sys::AVMediaType_AVMEDIA_TYPE_AUDIO,
+                mpegts_program
+                    .as_ref()
+                    .map(|program| program.streams.as_slice()),
             ) {
                 Ok(x) => x,
                 Err(e) => {
@@ -470,6 +490,7 @@ impl DecoderEngine {
             fallback_reason,
             video_index,
             audio_index,
+            mpegts_program,
             frame_index: 0,
             interrupt,
             queued: VecDeque::new(),
@@ -509,6 +530,12 @@ impl DecoderEngine {
             let rc = unsafe { sys::av_read_frame(self.fmt, pkt) };
             if rc == 0 {
                 let si = unsafe { (*pkt).stream_index };
+                if si == self.video_index || Some(si) == self.audio_index {
+                    if let Err(error) = self.validate_mpegts_program() {
+                        unsafe { sys::av_packet_free(&mut pkt) };
+                        return Err(error);
+                    }
+                }
                 if si == self.video_index {
                     if self.pump_video(pkt)? {
                         self.video_done = true;
@@ -518,6 +545,10 @@ impl DecoderEngine {
                 }
                 unsafe { sys::av_packet_unref(pkt) };
             } else if rc == sys::averror_eof() {
+                if let Err(error) = self.validate_mpegts_program() {
+                    unsafe { sys::av_packet_free(&mut pkt) };
+                    return Err(error);
+                }
                 self.draining = true;
             } else {
                 unsafe { sys::av_packet_free(&mut pkt) };
@@ -532,6 +563,19 @@ impl DecoderEngine {
             }
             unsafe { sys::av_packet_free(&mut pkt) };
         }
+    }
+
+    /// PMT の変更は解析対象が途中で入れ替わる可能性があるため結果を公開しない。
+    fn validate_mpegts_program(&self) -> Result<(), DecodeError> {
+        if let Some(expected) = &self.mpegts_program {
+            let current = select_mpegts_program(self.fmt, expected.service)?;
+            if &current != expected {
+                return Err(DecodeError::Unsupported(
+                    "MPEG-TS service changed during analysis".into(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Send packet (NULL to flush) then receive until needs-more or EOF.
@@ -750,39 +794,129 @@ unsafe fn cleanup_live(
     let _ = Box::from_raw(io_ptr);
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct MPEGTSProgram {
+    service: i64,
+    pmt_pid: i32,
+    pmt_version: i32,
+    streams: Vec<usize>,
+}
+
+/// 指定された MPEG-TS サービスに属する stream index と PMT 世代を確定する。
+fn select_mpegts_program(
+    fmt: *mut sys::AVFormatContext,
+    service: i64,
+) -> Result<MPEGTSProgram, DecodeError> {
+    unsafe {
+        let input_format = (*fmt).iformat;
+        if input_format.is_null() || (*input_format).name.is_null() {
+            return Err(DecodeError::Unsupported("input format is unknown".into()));
+        }
+        let name = std::ffi::CStr::from_ptr((*input_format).name).to_string_lossy();
+        if !name.split(',').any(|part| part == "mpegts") {
+            return Err(DecodeError::Unsupported(
+                "--mpegts-service requires MPEG-TS input".into(),
+            ));
+        }
+        if (*fmt).programs.is_null() {
+            return Err(DecodeError::Unsupported(format!(
+                "MPEG-TS service {service} not found"
+            )));
+        }
+        let mut found: Option<MPEGTSProgram> = None;
+        for position in 0..(*fmt).nb_programs as usize {
+            let program = *(*fmt).programs.add(position);
+            if program.is_null() || i64::from((*program).program_num) != service {
+                continue;
+            }
+            if found.is_some() {
+                return Err(DecodeError::Unsupported(format!(
+                    "MPEG-TS service {service} is ambiguous"
+                )));
+            }
+            let count = (*program).nb_stream_indexes as usize;
+            if count == 0 || (*program).stream_index.is_null() {
+                return Err(DecodeError::Unsupported(format!(
+                    "MPEG-TS service {service} has no streams"
+                )));
+            }
+            let mut indexes = Vec::with_capacity(count);
+            for &index in std::slice::from_raw_parts((*program).stream_index, count) {
+                if index >= (*fmt).nb_streams {
+                    return Err(DecodeError::Runtime(
+                        "program stream index is out of range".into(),
+                    ));
+                }
+                indexes.push(index as usize);
+            }
+            indexes.sort_unstable();
+            indexes.dedup();
+            found = Some(MPEGTSProgram {
+                service,
+                pmt_pid: (*program).pmt_pid,
+                pmt_version: (*program).pmt_version,
+                streams: indexes,
+            });
+        }
+        found
+            .ok_or_else(|| DecodeError::Unsupported(format!("MPEG-TS service {service} not found")))
+    }
+}
+
 fn select_stream(
     fmt: *mut sys::AVFormatContext,
     ordinal: Option<u32>,
     abs: Option<i32>,
     mtype: sys::AVMediaType,
+    program: Option<&[usize]>,
 ) -> Result<Option<i32>, DecodeError> {
     unsafe {
-        let nb = (*fmt).nb_streams;
+        let nb = (*fmt).nb_streams as usize;
         if let Some(ai) = abs {
-            if ai < 0 || (ai as u64) >= nb as u64 {
+            if ai < 0 || ai as usize >= nb {
                 return Err(DecodeError::Io(format!(
                     "stream index {ai} out of range (0..{nb})"
                 )));
             }
+            let index = ai as usize;
+            if program.is_some_and(|streams| !streams.contains(&index)) {
+                return Err(DecodeError::Unsupported(format!(
+                    "stream {ai} is not part of the selected MPEG-TS service"
+                )));
+            }
+            let st = stream_at(fmt, index);
+            if (*(*st).codecpar).codec_type != mtype {
+                return Err(DecodeError::Unsupported(format!(
+                    "stream {ai} has the wrong media type"
+                )));
+            }
             return Ok(Some(ai));
         }
-        if let Some(ord) = ordinal {
+        if ordinal.is_some() || program.is_some() {
+            let candidates: Vec<usize> = match program {
+                Some(streams) => streams.to_vec(),
+                None => (0..nb).collect(),
+            };
             let mut seen: u32 = 0;
-            for i in 0..nb {
-                let st = stream_at(fmt, i as usize);
+            let wanted = ordinal.unwrap_or(0);
+            for index in candidates {
+                let st = stream_at(fmt, index);
                 if (*(*st).codecpar).codec_type == mtype {
-                    if seen == ord {
-                        return Ok(Some(i as i32));
+                    if seen == wanted {
+                        return Ok(Some(index as i32));
                     }
                     seen += 1;
                 }
             }
-            return Err(DecodeError::Io(format!(
-                "no stream with ordinal {ord} of requested type (found {seen})"
-            )));
+            if ordinal.is_some() {
+                return Err(DecodeError::Io(format!(
+                    "no stream with ordinal {wanted} of requested type (found {seen})"
+                )));
+            }
+            return Ok(None);
         }
     }
-    // §4.5 default rule
+    // program が未指定なら従来どおり FFmpeg の最適 stream を選ぶ。
     let idx = unsafe { sys::av_find_best_stream(fmt, mtype, -1, -1, std::ptr::null_mut(), 0) };
     if idx < 0 {
         Ok(None)

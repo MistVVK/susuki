@@ -63,6 +63,7 @@ pub struct DecodeConfig {
     pub video_stream: Option<StreamSel>,
     pub audio_stream: Option<AudioStreamSel>,
     pub tlv_service: Option<i64>,
+    pub mpegts_service: Option<i64>,
     /// --tolerate-decode-errors: skip per-packet decode errors instead of aborting
     pub tolerate_decode_errors: bool,
     /// --expected-duration: 期待される番組尺 (秒)。映像パケットが先に枯れた録画でも
@@ -227,7 +228,9 @@ fn parse_stream_sel(v: &OsStr, name: &str, prefix: &str) -> Result<StreamSel, Ar
                 "option {name}: negative absolute index {n} is invalid"
             )));
         }
-        Ok(StreamSel::AbsIndex(n as i32))
+        let index = i32::try_from(n)
+            .map_err(|_| ArgError(format!("option {name}: absolute index {n} is too large")))?;
+        Ok(StreamSel::AbsIndex(index))
     }
 }
 
@@ -306,6 +309,15 @@ where
                 } else {
                     AudioStreamSel::Sel(parse_stream_sel(&val, "--audio-stream", "a:")?)
                 });
+            }
+            "--mpegts-service" => {
+                p.mark_once("--mpegts-service")?;
+                let val = take_value(flag, inline, &mut it)?;
+                let service = parse_int(&val, "--mpegts-service")?;
+                if !(1..=65535).contains(&service) {
+                    return Err(ArgError("--mpegts-service must be in 1..65535".to_string()));
+                }
+                p.opts.decode.mpegts_service = Some(service);
             }
             "--tlv-service" => {
                 p.mark_once("--tlv-service")?;
@@ -550,6 +562,11 @@ fn validate(o: &Options) -> Result<(), ArgError> {
     if !o.logo.disabled && o.logo.paths.is_empty() {
         return Err(ArgError(
             "either --logo (one or more) or --no-logo is required".to_string(),
+        ));
+    }
+    if o.decode.mpegts_service.is_some() && o.decode.tlv_service.is_some() {
+        return Err(ArgError(
+            "--mpegts-service and --tlv-service cannot be combined".to_string(),
         ));
     }
     if o.decode.device.is_some() && o.decode.backend == Backend::Cpu {
