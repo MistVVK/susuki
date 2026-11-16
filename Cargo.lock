@@ -960,7 +960,7 @@ dependencies = [
 
 [[package]]
 name = "susuki"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "encoding_rs",
  "susuki-core",
@@ -970,7 +970,7 @@ dependencies = [
 
 [[package]]
 name = "susuki-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pollster",
  "susuki-logo-file",
@@ -979,7 +979,7 @@ dependencies = [
 
 [[package]]
 name = "susuki-decode"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bindgen",
  "cc",
@@ -989,7 +989,7 @@ dependencies = [
 
 [[package]]
 name = "susuki-logo-file"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "encoding_rs",
 ]
