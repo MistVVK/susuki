@@ -26,8 +26,8 @@ NVCODEC_COMMIT=e844e5b26f46bb77479f063029595293aa8f812d
 # ディストリビューションの開発パッケージを使う。いずれも静的に FFmpeg DLL へ組み込む
 # zlib: Zlib ライセンス / bzip2: BSD 系 (bzip2 license) / xz の liblzma: 0BSD
 ZLIB_REPO=https://github.com/madler/zlib
-ZLIB_TAG=v1.3.2
-ZLIB_COMMIT=da607da739fa6047df13e66a2af6b8bec7c2a498
+ZLIB_TAG=v1.4
+ZLIB_COMMIT=99623ef7097352da7993ba614161fd6a311e046e
 
 BZIP2_REPO=https://sourceware.org/git/bzip2.git
 BZIP2_TAG=bzip2-1.0.8
