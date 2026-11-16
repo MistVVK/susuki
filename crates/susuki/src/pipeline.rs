@@ -495,6 +495,7 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
     // card-32: 以降の mute 閉塞・scene・JLS・出力はタイムライン枠を基準に動かす。
     // 未指定時は video_frames と同値なので、既存の完走ケース出力は変わらない。
     let video_frames = total_frames;
+    timeline.validate_audio_end(video_frames, info.audio_stream_index.is_some())?;
     let audio_frames = i64::from(mutedet.frames_evaluated());
     let total_frames = timeline_frames(
         video_frames,

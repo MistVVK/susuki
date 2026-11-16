@@ -66,6 +66,25 @@ impl Timeline {
         Ok(())
     }
 
+    /// 選択音声が映像の大部分を覆わなければ、途中の PID 交代などを見落とす。
+    pub fn validate_audio_end(&self, video_frames: i64, has_audio_stream: bool) -> TimelineResult {
+        if has_audio_stream {
+            if !self.audio_started {
+                return Err((
+                    "selected audio has no samples on the video timeline".into(),
+                    5,
+                ));
+            }
+            let video_end_ns = i128::from(video_frames) * i128::from(self.fps_den) * 1_000_000_000
+                / i128::from(self.fps_num);
+            // AAC 等の端数・入力末尾の短い差は許容する。長い欠落は正常扱いしない。
+            if video_end_ns - self.audio_cursor_ns > 1_000_000_000 {
+                return Err(("selected audio ends before the video".into(), 5));
+            }
+        }
+        Ok(())
+    }
+
     /// 出力する秒数の原点。解析成功時には先頭映像で必ず確定する。
     pub fn video_origin_us(&self) -> Option<i64> {
         self.video_origin_us
