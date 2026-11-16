@@ -130,6 +130,18 @@ extern "C" fn get_format_cb(
     sys::AVPixelFormat_AV_PIX_FMT_NONE
 }
 
+/// 解析中に変えるとロゴや輝度の判定を混在させる映像構成。
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct VideoConfiguration {
+    width: i32,
+    height: i32,
+    format: i32,
+    color_range: sys::AVColorRange,
+    color_primaries: sys::AVColorPrimaries,
+    color_trc: sys::AVColorTransferCharacteristic,
+    colorspace: sys::AVColorSpace,
+}
+
 pub struct DecoderEngine {
     fmt: *mut sys::AVFormatContext,
     iobuf: *mut sys::AVIOContext,
@@ -147,6 +159,10 @@ pub struct DecoderEngine {
     audio_index: Option<i32>,
     /// 初回に選択した TS program。以後の PMT 変更で誤った PID を解析しない。
     mpegts_program: Option<MPEGTSProgram>,
+    /// TLV 初回 probe 後の stream 総数。追加された track を見逃さない。
+    tlv_stream_count: Option<u32>,
+    /// 最初の復号フレームで確定した構成。変化時は結果を出さず失敗する。
+    video_configuration: Option<VideoConfiguration>,
     frame_index: i64,
     interrupt: Arc<AtomicBool>,
     queued: VecDeque<FrameEvent>,
@@ -476,6 +492,34 @@ impl DecoderEngine {
             adec = Some(ctx);
         }
 
+        // TLV MPT の変更通知は FFmpeg の stream event に残る。probe 中の通知は
+        // 初期状態に含め、以降の通知と新規 stream を検出する。
+        let input_name = unsafe { (*(*fmt).iformat).name };
+        let is_tlv = !input_name.is_null()
+            && unsafe { std::ffi::CStr::from_ptr(input_name) }.to_bytes() == b"libaribtlv";
+        let tlv_stream_count = if is_tlv {
+            for index in std::iter::once(video_index).chain(audio_index) {
+                let stream = stream_at(fmt, index as usize);
+                if unsafe { (*stream).discard == sys::AVDiscard_AVDISCARD_ALL } {
+                    unsafe {
+                        if let Some(mut audio) = adec {
+                            sys::avcodec_free_context(&mut audio);
+                        }
+                        let mut video = vdec;
+                        sys::avcodec_free_context(&mut video);
+                        cleanup_live(fmt, iobuf, io_ptr);
+                    }
+                    return Err(DecodeError::Unsupported(
+                        "selected TLV track was removed during probing".into(),
+                    ));
+                }
+                unsafe { (*stream).event_flags = 0 };
+            }
+            Some(unsafe { (*fmt).nb_streams })
+        } else {
+            None
+        };
+
         Ok(DecoderEngine {
             fmt,
             iobuf,
@@ -491,6 +535,8 @@ impl DecoderEngine {
             video_index,
             audio_index,
             mpegts_program,
+            tlv_stream_count,
+            video_configuration: None,
             frame_index: 0,
             interrupt,
             queued: VecDeque::new(),
@@ -528,6 +574,12 @@ impl DecoderEngine {
                 return Err(DecodeError::Runtime("av_packet_alloc failed".to_string()));
             }
             let rc = unsafe { sys::av_read_frame(self.fmt, pkt) };
+            // MPT が一度変わって元に戻っても通知は残る。選択 PID の途中変更を
+            // 旧ストリームの完走や正常な CM 結果として扱わない。
+            if let Err(error) = self.validate_tlv_tracks() {
+                unsafe { sys::av_packet_free(&mut pkt) };
+                return Err(error);
+            }
             if rc == 0 {
                 let si = unsafe { (*pkt).stream_index };
                 if si == self.video_index || Some(si) == self.audio_index {
@@ -563,6 +615,28 @@ impl DecoderEngine {
             }
             unsafe { sys::av_packet_free(&mut pkt) };
         }
+    }
+
+    /// 選択した TLV track の削除・構成変更と、新しい track の追加を拒否する。
+    fn validate_tlv_tracks(&self) -> Result<(), DecodeError> {
+        if let Some(count) = self.tlv_stream_count {
+            if unsafe { (*self.fmt).nb_streams } != count {
+                return Err(DecodeError::Unsupported(
+                    "TLV tracks changed during analysis".into(),
+                ));
+            }
+            for index in std::iter::once(self.video_index).chain(self.audio_index) {
+                let stream = stream_at(self.fmt, index as usize);
+                if unsafe {
+                    (*stream).event_flags & sys::AVSTREAM_EVENT_FLAG_METADATA_UPDATED as i32 != 0
+                } {
+                    return Err(DecodeError::Unsupported(
+                        "selected TLV track changed during analysis".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// PMT の変更は解析対象が途中で入れ替わる可能性があるため結果を公開しない。
@@ -715,6 +789,29 @@ impl DecoderEngine {
 
     /// §4.2 hw->system transfer + §6.0 luma + §5.1 sequential index.
     fn emit_frame(&mut self, frame: *mut sys::AVFrame) -> Result<FrameEvent, DecodeError> {
+        // 解像度・pixel format・色記述が途中で変わると、固定ロゴや輝度を
+        // 同じ条件で解析できない。復号中の全フレームで初回構成と照合する。
+        let configuration = unsafe {
+            VideoConfiguration {
+                width: (*frame).width,
+                height: (*frame).height,
+                format: (*frame).format,
+                color_range: (*frame).color_range,
+                color_primaries: (*frame).color_primaries,
+                color_trc: (*frame).color_trc,
+                colorspace: (*frame).colorspace,
+            }
+        };
+        if self
+            .video_configuration
+            .is_some_and(|initial| initial != configuration)
+        {
+            return Err(DecodeError::Unsupported(
+                "video configuration changed during analysis".into(),
+            ));
+        }
+        self.video_configuration = Some(configuration);
+
         // get_format negotiates during decoding, after open2, and may run again
         // on a format change. The received frame owns the HW context required
         // by av_hwframe_transfer_data; open-time ctx.pix_fmt is not authoritative.

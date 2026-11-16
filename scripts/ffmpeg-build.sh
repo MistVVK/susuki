@@ -122,6 +122,7 @@ fetch_pinned "$FFMPEG_REPO" "$FFMPEG_TAG" "$FFMPEG_COMMIT" "$BUILD_DIR/ffmpeg"
 $PATCH0001_SHA256  0001-Add-ARIB-MMT-TLV-demuxer-support-via-libaribtlv.patch
 $PATCH0002_SHA256  0002-avformat-libaribtlv-report-recording-duration.patch
 $PATCH0003_SHA256  0003-avformat-libaribtlv-support-timestamp-seeking.patch
+$PATCH0004_SHA256  0004-avformat-libaribtlv-track-changes.patch
 EOF
 )
 for p in "$ROOT"/vendor/patches/ffmpeg-"$FFMPEG_VERSION"/*.patch; do

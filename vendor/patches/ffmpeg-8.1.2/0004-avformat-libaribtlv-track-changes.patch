@@ -1,0 +1,37 @@
+--- a/libavformat/libaribtlv.c
++++ b/libavformat/libaribtlv.c
+@@ -113,6 +113,20 @@
+     stream_index = libaribtlv_track_index(ctx, track->track_id);
+     if (stream_index >= 0) {
+         st = ctx->format->streams[stream_index];
++        /* Keep a sticky notification even if a later MPT restores the old
++         * track before av_read_frame returns.  The consumer clears this bit
++         * after initial probing and must reject a mid-stream change. */
++        if (st->discard == AVDISCARD_ALL ||
++            st->id != track->packet_id ||
++            st->codecpar->codec_type != libaribtlv_media_type(track->kind) ||
++            st->codecpar->codec_id != libaribtlv_codec_id(track->codec) ||
++            st->time_base.num != 1 ||
++            st->time_base.den != (track->timescale ? track->timescale : 1) ||
++            (track->has_audio &&
++             (st->codecpar->sample_rate != track->audio_sample_rate ||
++              (track->audio_channels &&
++               st->codecpar->ch_layout.nb_channels != track->audio_channels))))
++            st->event_flags |= AVSTREAM_EVENT_FLAG_METADATA_UPDATED;
+         st->discard = AVDISCARD_DEFAULT;
+     } else {
+         st = avformat_new_stream(ctx->format, NULL);
+@@ -159,8 +173,11 @@
+     LibaribtlvContext *ctx = opaque;
+     int stream_index = libaribtlv_track_index(ctx, track->track_id);
+ 
+-    if (stream_index >= 0)
+-        ctx->format->streams[stream_index]->discard = AVDISCARD_ALL;
++    if (stream_index >= 0) {
++        AVStream *st = ctx->format->streams[stream_index];
++        st->event_flags |= AVSTREAM_EVENT_FLAG_METADATA_UPDATED;
++        st->discard = AVDISCARD_ALL;
++    }
+ }
+ 
+ static void libaribtlv_on_access_unit(void *opaque,
