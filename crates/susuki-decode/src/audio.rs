@@ -67,6 +67,7 @@ pub unsafe fn audio_peaks(frame: &sys::AVFrame) -> Result<AudioChunk, DecodeErro
     Ok(AudioChunk {
         peaks,
         sample_rate: frame.sample_rate as u32,
+        pts_us: None,
     })
 }
 

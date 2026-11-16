@@ -42,6 +42,11 @@ pub struct InputSpec {
 pub struct StreamInfo {
     pub video_stream_index: i64,
     pub audio_stream_index: Option<i64>,
+    /// コンテナ内の識別子 (MPEG-TS の PID 等)。
+    pub video_stream_id: Option<i64>,
+    pub audio_stream_id: Option<i64>,
+    /// コンテナの先頭時刻 (AV_TIME_BASE のマイクロ秒)。不明なら None。
+    pub format_start_us: Option<i64>,
     pub width: i64,
     pub height: i64,
     pub video_codec: String,
@@ -622,7 +627,10 @@ impl DecoderEngine {
                     sys::err_str(rc)
                 )));
             }
-            let chunk = unsafe { audio_peaks(&*frame) };
+            let mut chunk = unsafe { audio_peaks(&*frame) };
+            if let Ok(ref mut chunk) = chunk {
+                chunk.pts_us = self.timestamp_us(frame, self.audio_index.expect("audio index"));
+            }
             unsafe { sys::av_frame_free(&mut frame) };
             self.queued.push_back(FrameEvent::Audio(chunk?));
         }
@@ -647,6 +655,18 @@ impl DecoderEngine {
     /// Number of decode errors skipped because --tolerate-decode-errors was given.
     pub fn decode_errors_skipped(&self) -> u64 {
         self.decode_errors_skipped
+    }
+
+    /// 入力ストリームの時間基準で PTS をマイクロ秒へ変換する。
+    fn timestamp_us(&self, frame: *mut sys::AVFrame, stream_index: i32) -> Option<i64> {
+        let pts = unsafe { (*frame).pts };
+        let time_base = unsafe { (*stream_at(self.fmt, stream_index as usize)).time_base };
+        if pts == i64::MIN || time_base.num <= 0 || time_base.den <= 0 {
+            return None;
+        }
+        let us =
+            i128::from(pts) * i128::from(time_base.num) * 1_000_000 / i128::from(time_base.den);
+        i64::try_from(us).ok()
     }
 
     /// §4.2 hw->system transfer + §6.0 luma + §5.1 sequential index.
@@ -688,6 +708,7 @@ impl DecoderEngine {
         Ok(FrameEvent::Video(DecodedFrame {
             index,
             pts: unsafe { (*frame).pts },
+            pts_us: self.timestamp_us(frame, self.video_index),
             luma: Arc::new(luma),
             interlaced: self.info.interlaced,
         }))
@@ -958,6 +979,20 @@ fn build_info(
     Ok(StreamInfo {
         video_stream_index: video_index as i64,
         audio_stream_index: audio_index.map(|x| x as i64),
+        video_stream_id: match unsafe { (*vst).id } {
+            value if value >= 0 => Some(i64::from(value)),
+            _ => None,
+        },
+        audio_stream_id: audio_index.and_then(|index| {
+            match unsafe { (*stream_at(fmt, index as usize)).id } {
+                value if value >= 0 => Some(i64::from(value)),
+                _ => None,
+            }
+        }),
+        format_start_us: match unsafe { (*fmt).start_time } {
+            i64::MIN => None,
+            value => Some(value),
+        },
         width: unsafe { (*par).width } as i64,
         height: unsafe { (*par).height } as i64,
         video_codec: codec_name(unsafe { (*par).codec_id }),

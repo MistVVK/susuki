@@ -2,6 +2,7 @@ mod cli;
 mod logo;
 mod output;
 mod pipeline;
+mod timeline;
 mod usage;
 
 use cli::{parse_args, ArgError, Cmd};

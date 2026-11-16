@@ -447,6 +447,7 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
         opts.scene.mute_min_frames as i32,
     );
     let mut total_frames: i64 = 0;
+    let mut timeline = crate::timeline::Timeline::new(info.fps_num, info.fps_den);
     let mut last_progress = std::time::Instant::now();
 
     loop {
@@ -463,6 +464,7 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
         let Some(ev) = ev else { break };
         match ev {
             FrameEvent::Video(f) => {
+                timeline.video(f.index, f.pts_us, &mut mutedet)?;
                 logos.push_frame(&f.luma);
                 let small = Arc::new(downscale(&f.luma, s));
                 if runner.lx != small.width || runner.ly != small.height {
@@ -484,9 +486,7 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
                     last_progress = std::time::Instant::now();
                 }
             }
-            FrameEvent::Audio(c) => mutedet
-                .push(&c.peaks, c.sample_rate)
-                .map_err(|e| (e.to_string(), 5u8))?,
+            FrameEvent::Audio(c) => timeline.audio(c, &mut mutedet)?,
         }
     }
     if total_frames <= 0 {
@@ -659,6 +659,7 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
         gpu_unsupported: engine.gpu_unsupported,
         fallback_reason: engine.fallback_reason.clone(),
         decode_errors_skipped: engine.decode_errors_skipped(),
+        video_start_us: timeline.video_origin_us().expect("first video PTS"),
     };
     let code = write_outputs(
         opts,
@@ -724,6 +725,8 @@ fn write_outputs(
         cnv,
         total_frames,
         input_path: opts.input.to_string_lossy().into_owned(),
+        format_start_us: info.format_start_us,
+        video_start_us: decode.video_start_us,
         width: info.width,
         height: info.height,
         video_codec: info.video_codec.clone(),
@@ -731,6 +734,8 @@ fn write_outputs(
         bit_depth: info.bit_depth as i64,
         video_stream_index: info.video_stream_index,
         audio_stream_index: info.audio_stream_index,
+        video_stream_id: info.video_stream_id,
+        audio_stream_id: info.audio_stream_id,
         tlv_service: opts.decode.tlv_service,
         backend: match decode.backend {
             BackendKind::Cpu => "cpu",
@@ -896,4 +901,5 @@ struct DecodeMeta {
     gpu_unsupported: bool,
     fallback_reason: Option<String>,
     decode_errors_skipped: u64,
+    video_start_us: i64,
 }

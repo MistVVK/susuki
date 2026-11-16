@@ -32,6 +32,8 @@ pub struct OutputData<'a> {
     pub cnv: &'a Cnv,
     pub total_frames: i64,
     pub input_path: String,
+    pub format_start_us: Option<i64>,
+    pub video_start_us: i64,
     pub width: i64,
     pub height: i64,
     pub video_codec: String,
@@ -39,6 +41,8 @@ pub struct OutputData<'a> {
     pub bit_depth: i64,
     pub video_stream_index: i64,
     pub audio_stream_index: Option<i64>,
+    pub video_stream_id: Option<i64>,
+    pub audio_stream_id: Option<i64>,
     pub tlv_service: Option<i64>,
     pub backend: &'static str,
     pub device: Option<String>,
@@ -225,10 +229,12 @@ pub fn build_json(d: &OutputData, keep: &[(i64, i64)], segs: &[DetailRec]) -> St
     ));
     j.push_str("    ]\n  },\n  \"input\": {\n");
     j.push_str(&format!(
-        "    \"path\": \"{}\",\n    \"duration_sec\": {},\n    \"total_frames\": {},\n    \"fps_num\": {}, \"fps_den\": {},\n    \"width\": {}, \"height\": {},\n    \"video_codec\": \"{}\",\n    \"interlaced\": {},\n    \"bit_depth\": {},\n    \"video_stream_index\": {},\n    \"audio_stream_index\": {},\n    \"tlv_service\": {}\n  }},\n",
+        "    \"path\": \"{}\",\n    \"duration_sec\": {},\n    \"total_frames\": {},\n    \"format_start_us\": {},\n    \"video_start_us\": {},\n    \"fps_num\": {}, \"fps_den\": {},\n    \"width\": {}, \"height\": {},\n    \"video_codec\": \"{}\",\n    \"interlaced\": {},\n    \"bit_depth\": {},\n    \"video_stream_index\": {},\n    \"audio_stream_index\": {},\n    \"video_stream_id\": {},\n    \"audio_stream_id\": {},\n    \"tlv_service\": {}\n  }},\n",
         json_escape(&d.input_path),
         fmt_sec(sec_of(d.cnv, d.total_frames)),
         d.total_frames,
+        opt_json(d.format_start_us),
+        d.video_start_us,
         d.cnv.tc.frate_n,
         d.cnv.tc.frate_d,
         d.width,
@@ -238,6 +244,8 @@ pub fn build_json(d: &OutputData, keep: &[(i64, i64)], segs: &[DetailRec]) -> St
         d.bit_depth,
         d.video_stream_index,
         opt_json(d.audio_stream_index),
+        opt_json(d.video_stream_id),
+        opt_json(d.audio_stream_id),
         opt_json(d.tlv_service)
     ));
     j.push_str(&format!(
