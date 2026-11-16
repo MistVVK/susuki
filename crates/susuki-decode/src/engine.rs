@@ -492,15 +492,19 @@ impl DecoderEngine {
             adec = Some(ctx);
         }
 
-        // TLV MPT の変更通知は FFmpeg の stream event に残る。probe 中の通知は
-        // 初期状態に含め、以降の通知と新規 stream を検出する。
+        // TLV MPT の変更通知は FFmpeg の stream event に残る。probe 中の
+        // パケットも後から解析されるため、probe 中の変更も見逃さず拒否する。
         let input_name = unsafe { (*(*fmt).iformat).name };
         let is_tlv = !input_name.is_null()
             && unsafe { std::ffi::CStr::from_ptr(input_name) }.to_bytes() == b"libaribtlv";
         let tlv_stream_count = if is_tlv {
             for index in std::iter::once(video_index).chain(audio_index) {
                 let stream = stream_at(fmt, index as usize);
-                if unsafe { (*stream).discard == sys::AVDiscard_AVDISCARD_ALL } {
+                if unsafe {
+                    (*stream).discard == sys::AVDiscard_AVDISCARD_ALL
+                        || (*stream).event_flags & sys::AVSTREAM_EVENT_FLAG_METADATA_UPDATED as i32
+                            != 0
+                } {
                     unsafe {
                         if let Some(mut audio) = adec {
                             sys::avcodec_free_context(&mut audio);
@@ -510,10 +514,9 @@ impl DecoderEngine {
                         cleanup_live(fmt, iobuf, io_ptr);
                     }
                     return Err(DecodeError::Unsupported(
-                        "selected TLV track was removed during probing".into(),
+                        "selected TLV track changed during probing".into(),
                     ));
                 }
-                unsafe { (*stream).event_flags = 0 };
             }
             Some(unsafe { (*fmt).nb_streams })
         } else {
