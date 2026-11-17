@@ -450,13 +450,22 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
         opts.scene.mute_min_frames as i32,
     );
     let mut total_frames: i64 = 0;
+    let mut video_gaps: Vec<(i64, i64)> = Vec::new();
     let mut timeline = crate::timeline::Timeline::new(info.fps_num, info.fps_den);
     let mut last_progress = std::time::Instant::now();
     // 次の PTS が来るまで直前の画像を保持し、表示期間内の格子へ複製する。
     // 元フレーム全体を蓄積せず、音声・映像・ロゴを同じ実時間の格子で解析する。
     let mut pending_frame: Option<DecodedFrame> = None;
     let mut previous_color_epoch: Option<u64> = None;
-    let mut push_video = |f: &DecodedFrame, index: i64| {
+    let mut push_video = |frame: Option<&DecodedFrame>, index: i64| {
+        // 欠落区間はロゴなしや静止画と断定せず、前後の映像も比較しない。
+        let Some(f) = frame else {
+            logos.push_missing_frame();
+            runner.feats.push(None);
+            runner.prev = None;
+            previous_color_epoch = None;
+            return;
+        };
         // 色記述が変わる境界は異なる信号条件の差を scene と誤認しない。
         // ロゴは元の各フレームから個別に評価し、音声・映像の時間軸は維持する。
         if previous_color_epoch.is_some_and(|previous| previous != f.color_epoch) {
@@ -494,14 +503,30 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
         let Some(ev) = ev else { break };
         match ev {
             FrameEvent::Video(f) => {
-                let boundary = timeline.video(f.pts_us, &mut mutedet)?;
+                let (boundary, missing_start) = timeline.video(
+                    f.pts_us,
+                    &mut mutedet,
+                    opts.decode.tolerate_video_gaps,
+                    pending_frame
+                        .as_ref()
+                        .and_then(|previous| previous.duration_us),
+                )?;
+                if let Some(start) = missing_start {
+                    // 前の格子との丸めを保護し、欠落の半開区間を出力にも残す。
+                    let start = start.max(total_frames).min(boundary);
+                    if start < boundary {
+                        video_gaps.push((start, boundary));
+                    }
+                }
                 if let Some(previous) = &pending_frame {
                     // 同じ格子に複数の映像が来た場合、最後の映像を採用する。
                     while total_frames < boundary {
                         if interrupted() {
                             return Ok(interrupted_in_analysis());
                         }
-                        push_video(previous, total_frames);
+                        // 実フレームの表示終端より後は観測不能のまま格子を進める。
+                        let observed = missing_start.is_none_or(|start| total_frames < start);
+                        push_video(observed.then_some(previous), total_frames);
                         total_frames += 1;
                     }
                 }
@@ -521,7 +546,7 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
         if interrupted() {
             return Ok(interrupted_in_analysis());
         }
-        push_video(&last, total_frames);
+        push_video(Some(&last), total_frames);
         total_frames += 1;
     }
     drop(push_video);
@@ -694,6 +719,7 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
         fallback_reason: engine.fallback_reason.clone(),
         decode_errors_skipped: engine.decode_errors_skipped(),
         video_color_changes: engine.video_color_changes(),
+        video_gaps,
         video_start_us: timeline.video_origin_us().expect("first video PTS"),
     };
     let code = write_outputs(
@@ -741,6 +767,9 @@ fn write_outputs(
     }
     if decode.decode_errors_skipped > 0 {
         warnings.push("decode_errors_skipped");
+    }
+    if !decode.video_gaps.is_empty() {
+        warnings.push("video_frames_missing");
     }
     // ロゴ検出も signal の色記述変化をまたぐため、結果の利用者へ明示する。
     if decode.video_color_changes > 0 {
@@ -795,12 +824,18 @@ fn write_outputs(
             .map(|iv| (iv.start_fr as i64, (iv.start_fr + iv.len) as i64))
             .collect(),
         scene_changes,
+        missing_video_ranges: decode.video_gaps.clone(),
         logos: logo_results.entries,
         warnings,
         version: env!("CARGO_PKG_VERSION").to_string(),
     };
 
-    let keep = out::normalize_keep(cnv, &ex.ds.result_trim, total_frames);
+    // 不明区間に重なる CM 候補は全体を本編として保護し、自動スキップしない。
+    let keep = out::protect_missing_video(
+        out::normalize_keep(cnv, &ex.ds.result_trim, total_frames),
+        &decode.video_gaps,
+        total_frames,
+    );
     let segs = out::collect_segments(&d);
     let json = out::build_json(&d, &keep, &segs);
     let chapter = out::build_chapter(&d, &keep);
@@ -942,5 +977,6 @@ struct DecodeMeta {
     fallback_reason: Option<String>,
     decode_errors_skipped: u64,
     video_color_changes: u64,
+    video_gaps: Vec<(i64, i64)>,
     video_start_us: i64,
 }

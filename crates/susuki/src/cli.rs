@@ -68,6 +68,8 @@ pub struct DecodeConfig {
     pub tolerate_decode_errors: bool,
     /// 映像を厳格に保ち、破損した音声 packet のみを欠落として扱う。
     pub tolerate_audio_decode_errors: bool,
+    /// 大きな映像欠落を不明な区間として扱う。時間の逆行は許容しない。
+    pub tolerate_video_gaps: bool,
     /// --expected-duration: 期待される番組尺 (秒)。映像パケットが先に枯れた録画でも
     /// 解析タイムラインを期待尺まで延ばし、音声だけで続く後半の CM を検出できるようにする。
     pub expected_duration: Option<f64>,
@@ -355,6 +357,13 @@ where
                 }
                 p.mark_once("--tolerate-audio-decode-errors")?;
                 p.opts.decode.tolerate_audio_decode_errors = true;
+            }
+            "--tolerate-video-gaps" => {
+                if inline.is_some() {
+                    return Err(ArgError("--tolerate-video-gaps takes no value".to_string()));
+                }
+                p.mark_once("--tolerate-video-gaps")?;
+                p.opts.decode.tolerate_video_gaps = true;
             }
             "--backend" => {
                 p.mark_once("--backend")?;

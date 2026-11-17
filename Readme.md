@@ -153,6 +153,11 @@ susuki INPUT.ts --no-logo --output-stdout json
 - `--tolerate-audio-decode-errors` は破損した音声 packet を読み飛ばす。欠落区間は
   無音と判定せず、映像やメモリ不足などの異常は引き続き失敗する。読み飛ばしがあれば
   JSON の `warnings` に `decode_errors_skipped` を記録する。
+- `--tolerate-video-gaps` は 5 秒超 30 秒以内の映像欠落を不明として扱う。
+  欠落中を静止画やロゴなしとは判定せず、欠落に触れる CM 候補は全体を本編として保護する。
+  JSON の `analysis.missing_video_ranges` と `video_frames_missing` を確認する。
+  保護は `result.keep_ranges` と chapter に反映する。`result.segments` と div は保護前の判定情報。
+  逆行・重複や 30 秒超の欠落は引き続き失敗する。
 - 色記述だけが変化した場合、各フレームの native luma で解析し、境界のフレーム同士を
   比較しない。結果には `video_color_configuration_changed` を記録する。ロゴの判定は
   色記述が変化した区間でも同じ候補ロゴを使うため、結果の確認が必要。

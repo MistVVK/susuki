@@ -11,6 +11,8 @@ type TimelineResult = Result<(), (String, u8)>;
 const TIMESTAMP_TOLERANCE_US: i128 = 2_000;
 /// 長すぎる欠落を静止映像として埋めて誤った CM 結果を作らない。
 const MAX_VIDEO_GAP_US: i64 = 5_000_000;
+/// 明示許容時も巨大な欠落を結果へ混ぜない。
+const MAX_TOLERATED_VIDEO_GAP_US: i64 = 30_000_000;
 /// 映像の開始前に大量の音声が並ぶ異常入力でメモリを使い尽くさない。
 const MAX_PENDING_SAMPLES: usize = 8_000_000;
 const MAX_PENDING_CHUNKS: usize = 16_384;
@@ -46,13 +48,32 @@ impl Timeline {
         &mut self,
         pts_us: Option<i64>,
         mute: &mut MuteDetector,
-    ) -> Result<i64, (String, u8)> {
+        tolerate_video_gaps: bool,
+        previous_duration_us: Option<i64>,
+    ) -> Result<(i64, Option<i64>), (String, u8)> {
         let pts = pts_us.ok_or_else(|| ("video frame has no usable PTS".into(), 5))?;
+        let mut missing_start = None;
         if let Some(last) = self.last_video_pts_us {
             // 逆行・重複は表示順を確定できない。大きな穴も欠落として拒否する。
             let delta = i128::from(pts) - i128::from(last);
-            if delta <= 0 || delta > i128::from(MAX_VIDEO_GAP_US) {
+            if delta <= 0
+                || delta > i128::from(MAX_TOLERATED_VIDEO_GAP_US)
+                || (delta > i128::from(MAX_VIDEO_GAP_US) && !tolerate_video_gaps)
+            {
                 return Err(("video timestamp discontinuity".into(), 5));
+            }
+            if delta > i128::from(MAX_VIDEO_GAP_US) {
+                // 直前の実フレームの表示期間だけを残す。欠落を静止画像で埋めない。
+                let nominal =
+                    (i128::from(self.fps_den) * 1_000_000 / i128::from(self.fps_num)).max(1) as i64;
+                // 破損 packet が異常に長い duration を持っても、欠落をその映像で埋めない。
+                let duration = previous_duration_us
+                    .filter(|d| *d > 0 && *d <= nominal.saturating_mul(2))
+                    .unwrap_or(nominal);
+                let end = last
+                    .checked_add(duration)
+                    .ok_or_else(|| ("video timestamp overflow".into(), 5))?;
+                missing_start = Some(self.frame_at(end)?);
             }
         } else {
             self.video_origin_us = Some(pts);
@@ -63,7 +84,7 @@ impl Timeline {
             self.pending_samples = 0;
         }
         self.last_video_pts_us = Some(pts);
-        self.frame_at(pts)
+        Ok((self.frame_at(pts)?, missing_start))
     }
 
     /// 最後の映像の表示終端を格子に写す。長さ不明なら公称 1 フレーム分。

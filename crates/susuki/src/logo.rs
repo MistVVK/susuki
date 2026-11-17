@@ -138,6 +138,15 @@ impl LogoRunner {
         }
     }
 
+    /// 欠落中はロゴなしではなく、両フィールドとも観測不能として記録する。
+    pub fn push_missing_frame(&mut self) {
+        for candidate in &mut self.candidates {
+            let index = candidate.store.push_frame();
+            candidate.store.flag_nosample[index] = 3;
+            candidate.store.rank_unclear[index] = 9;
+        }
+    }
+
     pub fn finish(mut self) -> LogoResults {
         for c in &mut self.candidates {
             logo_find(&mut c.store, &c.thres);

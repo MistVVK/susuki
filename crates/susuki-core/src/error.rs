@@ -26,6 +26,7 @@ pub enum WarnCode {
     AnalysisGpuFallback,
     DecodeErrorsSkipped,
     VideoColorConfigurationChanged,
+    VideoFramesMissing,
 }
 
 impl WarnCode {
@@ -39,6 +40,7 @@ impl WarnCode {
             WarnCode::AnalysisGpuFallback => "analysis_gpu_fallback",
             WarnCode::DecodeErrorsSkipped => "decode_errors_skipped",
             WarnCode::VideoColorConfigurationChanged => "video_color_configuration_changed",
+            WarnCode::VideoFramesMissing => "video_frames_missing",
         }
     }
 }

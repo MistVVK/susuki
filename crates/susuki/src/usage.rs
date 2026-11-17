@@ -35,6 +35,7 @@ DECODE OPTIONS:
     --analysis-backend NAME      auto|cpu|gpu (analysis compute, see design 6.5)
     --tolerate-decode-errors     skip corrupt packets (decode errors) instead of aborting
     --tolerate-audio-decode-errors  skip corrupt audio packets while keeping video strict
+    --tolerate-video-gaps        mark bounded missing video as unknown, not still or logo-off
 
 SCENE PARAMETERS (chapter_exe derived):
     --mute-threshold N           mute amplitude threshold 1..32767 (default: 50)

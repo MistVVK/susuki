@@ -52,6 +52,7 @@ pub struct OutputData<'a> {
     pub script_name: String,
     pub mute_intervals: Vec<(i64, i64)>,
     pub scene_changes: Vec<(i64, bool)>,
+    pub missing_video_ranges: Vec<(i64, i64)>,
     pub logos: Vec<LogoEntry>,
     pub warnings: Vec<&'static str>,
     pub version: String,
@@ -100,6 +101,36 @@ pub fn normalize_keep(cnv: &Cnv, trim_ms: &[i32], total: i64) -> Vec<(i64, i64)>
         }
     }
     out
+}
+
+/// 映像欠落に触れる CM 候補を丸ごと保護し、不明な内容を自動で除外しない。
+/// 比較は半開範囲で行い、時刻の格子丸めに備えて前後 1 フレームを含める。
+pub fn protect_missing_video(
+    keep: Vec<(i64, i64)>,
+    missing: &[(i64, i64)],
+    total: i64,
+) -> Vec<(i64, i64)> {
+    let mut protected = keep.clone();
+    let mut cursor = 0;
+    for (start, end) in keep.iter().copied().chain(std::iter::once((total, total))) {
+        if cursor < start
+            && missing.iter().any(|(s, e)| {
+                cursor < e.saturating_add(1).min(total) && s.saturating_sub(1) < start
+            })
+        {
+            protected.push((cursor, start));
+        }
+        cursor = end;
+    }
+    protected.sort_unstable_by_key(|range| range.0);
+    let mut merged: Vec<(i64, i64)> = Vec::new();
+    for (start, end) in protected {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
 }
 
 fn kind_label(arstat: i32) -> &'static str {
@@ -301,6 +332,13 @@ pub fn build_json(d: &OutputData, keep: &[(i64, i64)], segs: &[DetailRec]) -> St
     j.push_str("    \"mute_intervals\": [");
     j.push_str(&join_json(
         d.mute_intervals
+            .iter()
+            .map(|(s, e)| format!("{{\"start_frame\": {}, \"end_frame\": {}}}", s, e))
+            .collect(),
+    ));
+    j.push_str("    ],\n    \"missing_video_ranges\": [");
+    j.push_str(&join_json(
+        d.missing_video_ranges
             .iter()
             .map(|(s, e)| format!("{{\"start_frame\": {}, \"end_frame\": {}}}", s, e))
             .collect(),
