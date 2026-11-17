@@ -9,6 +9,8 @@ type TimelineResult = Result<(), (String, u8)>;
 
 /// フレーム格子の量子化やコンテナの時間基準による端数を許容する。
 const TIMESTAMP_TOLERANCE_US: i128 = 2_000;
+/// 長すぎる欠落を静止映像として埋めて誤った CM 結果を作らない。
+const MAX_VIDEO_GAP_US: i64 = 5_000_000;
 /// 映像の開始前に大量の音声が並ぶ異常入力でメモリを使い尽くさない。
 const MAX_PENDING_SAMPLES: usize = 8_000_000;
 const MAX_PENDING_CHUNKS: usize = 16_384;
@@ -17,6 +19,7 @@ pub struct Timeline {
     fps_num: i64,
     fps_den: i64,
     video_origin_us: Option<i64>,
+    last_video_pts_us: Option<i64>,
     pending: VecDeque<AudioChunk>,
     pending_samples: usize,
     audio_cursor_ns: i128,
@@ -29,6 +32,7 @@ impl Timeline {
             fps_num,
             fps_den,
             video_origin_us: None,
+            last_video_pts_us: None,
             pending: VecDeque::new(),
             pending_samples: 0,
             audio_cursor_ns: 0,
@@ -36,34 +40,59 @@ impl Timeline {
         }
     }
 
+    /// 映像 PTS を音声と共通の実時間上の固定フレーム格子へ写す。
+    /// 隣り合う PTS の間は前の映像を保持し、同じ格子位置に入る映像は後のものを使う。
     pub fn video(
         &mut self,
-        index: i64,
         pts_us: Option<i64>,
         mute: &mut MuteDetector,
-    ) -> TimelineResult {
+    ) -> Result<i64, (String, u8)> {
         let pts = pts_us.ok_or_else(|| ("video frame has no usable PTS".into(), 5))?;
-        if let Some(origin) = self.video_origin_us {
-            // JLS は一定 fps の格子を使う。VFR や欠落をその格子に載せると
-            // CM の位置がずれるため、対応できるまでは結果を公開しない。
-            let actual = (i128::from(pts) - i128::from(origin)) * i128::from(self.fps_num);
-            let expected = i128::from(index) * i128::from(self.fps_den) * 1_000_000;
-            if (actual - expected).abs() > TIMESTAMP_TOLERANCE_US * i128::from(self.fps_num) {
-                return Err((
-                    "video timestamps do not match the nominal frame rate".into(),
-                    5,
-                ));
+        if let Some(last) = self.last_video_pts_us {
+            // 逆行・重複は表示順を確定できない。大きな穴も欠落として拒否する。
+            let delta = i128::from(pts) - i128::from(last);
+            if delta <= 0 || delta > i128::from(MAX_VIDEO_GAP_US) {
+                return Err(("video timestamp discontinuity".into(), 5));
             }
         } else {
             self.video_origin_us = Some(pts);
-            // demux 順によっては映像より音声が先に復号される。基準時刻が確定して
-            // から消費することで、先頭音声を消失させずに位置合わせする。
+            // 映像より先に届いた音声は、映像の原点が決まってから揃える。
             while let Some(chunk) = self.pending.pop_front() {
                 self.align_audio(chunk, mute)?;
             }
             self.pending_samples = 0;
         }
-        Ok(())
+        self.last_video_pts_us = Some(pts);
+        self.frame_at(pts)
+    }
+
+    /// 最後の映像の表示終端を格子に写す。長さ不明なら公称 1 フレーム分。
+    pub fn video_end(&self, duration_us: Option<i64>) -> Result<i64, (String, u8)> {
+        let pts = self.last_video_pts_us.expect("first video PTS");
+        let duration = match duration_us {
+            Some(duration) if duration > 0 && duration <= MAX_VIDEO_GAP_US => duration,
+            Some(_) => return Err(("invalid final video frame duration".into(), 5)),
+            None => (i128::from(self.fps_den) * 1_000_000 / i128::from(self.fps_num)).max(1) as i64,
+        };
+        let end = pts
+            .checked_add(duration)
+            .ok_or_else(|| ("video timestamp overflow".into(), 5))?;
+        let frames = self.frame_at(end)?.max(self.frame_at(pts)? + 1);
+        if frames > i64::from(i32::MAX) {
+            return Err(("video timeline exceeds supported frame count".into(), 5));
+        }
+        Ok(frames)
+    }
+
+    fn frame_at(&self, pts: i64) -> Result<i64, (String, u8)> {
+        let origin = self.video_origin_us.expect("first video PTS");
+        let numerator = (i128::from(pts) - i128::from(origin)) * i128::from(self.fps_num);
+        let denominator = i128::from(self.fps_den) * 1_000_000;
+        let frame = (numerator + denominator / 2) / denominator;
+        if frame < 0 || frame > i128::from(i32::MAX) {
+            return Err(("video timeline exceeds supported frame count".into(), 5));
+        }
+        Ok(frame as i64)
     }
 
     /// 選択音声が映像の大部分を覆わなければ、途中の PID 交代などを見落とす。

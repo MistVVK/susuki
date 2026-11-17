@@ -866,6 +866,20 @@ impl DecoderEngine {
             index,
             pts: unsafe { (*frame).pts },
             pts_us: self.timestamp_us(frame, self.video_index),
+            // 最終フレームの表示終端に使う。時刻基準が不明なら None のまま渡す。
+            duration_us: {
+                let duration = unsafe { (*frame).duration };
+                let tb = unsafe { (*stream_at(self.fmt, self.video_index as usize)).time_base };
+                if duration > 0 && tb.num > 0 && tb.den > 0 {
+                    i64::try_from(
+                        i128::from(duration) * i128::from(tb.num) * 1_000_000 / i128::from(tb.den),
+                    )
+                    .ok()
+                    .filter(|&us| us > 0)
+                } else {
+                    None
+                }
+            },
             luma: Arc::new(luma),
             interlaced: self.info.interlaced,
         }))

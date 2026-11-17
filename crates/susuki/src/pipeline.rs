@@ -69,6 +69,7 @@ use susuki_core::timeaxis::TimeConverter;
 use crate::cli::{AnalysisBackend, AudioStreamSel, Backend, Options, StreamSel};
 use susuki_decode::device::{select_auto, BackendKind, Probe};
 use susuki_decode::engine::{DecoderEngine, FrameEvent, InputSpec};
+use susuki_decode::frame::DecodedFrame;
 use susuki_decode::luma::{downscale, scale_factor, Luma};
 
 struct Runner {
@@ -450,6 +451,26 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
     let mut total_frames: i64 = 0;
     let mut timeline = crate::timeline::Timeline::new(info.fps_num, info.fps_den);
     let mut last_progress = std::time::Instant::now();
+    // 次の PTS が来るまで直前の画像を保持し、表示期間内の格子へ複製する。
+    // 元フレーム全体を蓄積せず、音声・映像・ロゴを同じ実時間の格子で解析する。
+    let mut pending_frame: Option<DecodedFrame> = None;
+    let mut push_video = |f: &DecodedFrame, index: i64| {
+        logos.push_frame(&f.luma);
+        let small = Arc::new(downscale(&f.luma, s));
+        if runner.lx != small.width || runner.ly != small.height {
+            // Frame pairs require the same geometry; a resolution
+            // change starts a new pair context without resetting time.
+            runner.prev = None;
+            runner.lx = small.width;
+            runner.ly = small.height;
+            runner.offs.clear();
+        }
+        if runner.offs.is_empty() {
+            runner.offs =
+                susuki_core::mvec::block_offsets(runner.lx, runner.ly, runner.pict_struct);
+        }
+        runner.push_frame(index as usize, &small);
+    };
 
     loop {
         if interrupted() {
@@ -465,23 +486,18 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
         let Some(ev) = ev else { break };
         match ev {
             FrameEvent::Video(f) => {
-                timeline.video(f.index, f.pts_us, &mut mutedet)?;
-                logos.push_frame(&f.luma);
-                let small = Arc::new(downscale(&f.luma, s));
-                if runner.lx != small.width || runner.ly != small.height {
-                    // Frame pairs require the same geometry; a resolution
-                    // change starts a new pair context without resetting time.
-                    runner.prev = None;
-                    runner.lx = small.width;
-                    runner.ly = small.height;
-                    runner.offs.clear();
+                let boundary = timeline.video(f.pts_us, &mut mutedet)?;
+                if let Some(previous) = &pending_frame {
+                    // 同じ格子に複数の映像が来た場合、最後の映像を採用する。
+                    while total_frames < boundary {
+                        if interrupted() {
+                            return Ok(interrupted_in_analysis());
+                        }
+                        push_video(previous, total_frames);
+                        total_frames += 1;
+                    }
                 }
-                if runner.offs.is_empty() {
-                    runner.offs =
-                        susuki_core::mvec::block_offsets(runner.lx, runner.ly, runner.pict_struct);
-                }
-                runner.push_frame(f.index as usize, &small);
-                total_frames = f.index + 1;
+                pending_frame = Some(f);
                 if last_progress.elapsed().as_secs() >= 1 {
                     eprintln!("PROGRESS\tscan\t{}\t0", total_frames);
                     last_progress = std::time::Instant::now();
@@ -490,9 +506,17 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
             FrameEvent::Audio(c) => timeline.audio(c, &mut mutedet)?,
         }
     }
-    if total_frames <= 0 {
-        return Err(("no video frames decoded".to_string(), 5u8));
+    let last = pending_frame.ok_or_else(|| ("no video frames decoded".to_string(), 5u8))?;
+    let video_end = timeline.video_end(last.duration_us)?;
+    // 最終映像の実際の表示期間も含め、最後の格子を生成する。
+    while total_frames < video_end {
+        if interrupted() {
+            return Ok(interrupted_in_analysis());
+        }
+        push_video(&last, total_frames);
+        total_frames += 1;
     }
+    drop(push_video);
     // card-32: 以降の mute 閉塞・scene・JLS・出力はタイムライン枠を基準に動かす。
     // 未指定時は video_frames と同値なので、既存の完走ケース出力は変わらない。
     let video_frames = total_frames;

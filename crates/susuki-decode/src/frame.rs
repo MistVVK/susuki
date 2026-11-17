@@ -13,6 +13,8 @@ pub struct DecodedFrame {
     pub pts: i64,
     /// Presentation timestamp in microseconds using the source stream time base.
     pub pts_us: Option<i64>,
+    /// Decoded frame duration in microseconds, when supplied by the demuxer.
+    pub duration_us: Option<i64>,
     pub luma: Arc<Luma>,
     /// interlaced source: field lines are consumed with stride 2 by analyzers (§6.0)
     pub interlaced: bool,
