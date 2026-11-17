@@ -14,6 +14,7 @@ from or links against (design doc §10.4 / §10.6).
 | `join_logo_scp.LICENSE` | REF-JLS upstream license (GPLv2+, as shipped upstream) |
 | `chapter_exe.LICENSE` | REF-CHAPTER upstream license (GPLv2+) |
 | `logoframe.LICENSE` | REF-LOGO upstream license (GPLv2+) |
+| `dav1d.LICENSE` | dav1d AV1 decoder (BSD-2-Clause) |
 | `libaribtlv.LICENSE` | REF-ARIBTLV upstream license (MIT) |
 | `ffmpeg-libaribtlv.LICENSE` | REF-FFMPEG-TLV patch set upstream license (MIT) |
 
@@ -43,6 +44,7 @@ in `crates/susuki/build.rs`, design §7.5 / §10.3).
 | Component | Repository | Pinned | License | Notes |
 |-----------|------------|--------|---------|-------|
 | FFmpeg 8.1.2 | https://github.com/FFmpeg/FFmpeg | tag `n8.1.2` (commit `38b88335f99e76ed89ff3c93f877fdefce736c13`) | LGPL-2.1-or-later | built **LGPL configuration** (`--disable-gpl`, see `scripts/ffmpeg-build.sh`); demuxers/decoders only, shared libraries |
+| dav1d 1.5.4 | https://code.videolan.org/videolan/dav1d | `54706fc6bc0cdecab7e9593974a4039cc038fca7` | BSD-2-Clause | AV1 software decoder, statically linked into FFmpeg |
 | libaribtlv v0.2.0 | https://github.com/makeding/libaribtlv | `91bafe32479141c660a334cc03aed1f9869a18a5` | MIT | MMT/TLV demuxer dependency |
 | ffmpeg-libaribtlv patches | https://github.com/makeding/ffmpeg-libaribtlv | `29cc14822fae9cb8cd06bbfdd584d06aa7a6a1fa` | MIT | `vendor/patches/ffmpeg-8.1.2/0001..0003`, SHA256 pinned in `ffmpeg.lock` |
 | ffnvcodec headers | https://github.com/FFmpeg/nv-codec-headers | see `ffmpeg.lock` | MIT | NVDEC build headers only |

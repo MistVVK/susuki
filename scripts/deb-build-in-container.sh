@@ -74,6 +74,7 @@ cp -r LICENSES "$DOC/LICENSES"
     echo "dpkg=$(dpkg-query -W -f '${Version}' dpkg)"
     echo "ffmpeg=$FFMPEG_TAG $FFMPEG_COMMIT"
     echo "libaribtlv=$LIBARIBTLV_TAG $LIBARIBTLV_COMMIT"
+    echo "dav1d=$DAV1D_TAG $DAV1D_COMMIT"
     echo "nv-codec-headers=$NVCODEC_TAG $NVCODEC_COMMIT"
 } > "$DOC/build-info.txt"
 find "$DOC" -type d -exec chmod 0755 {} + && find "$DOC" -type f -exec chmod 0644 {} +

@@ -6,7 +6,7 @@
 - Cargo.toml の宣言は edition 2021、rust-version 1.85。リポジトリに Rust toolchain の固定ファイルはない。確認済みの環境は stable の rustc/Cargo 1.99.0、rustfmt 1.10.0-stable、Clippy 0.1.99、ShellCheck 0.10.0。これは実測値であり、最低対応版の検証結果ではない。検証時には実際のバージョンを記録する。
 - 使用する Rust toolchain に rustfmt と Clippy を用意する（rustup を使う場合は `rustup component add rustfmt clippy`）。ShellCheck もコンテナ内に用意する。
 - Clippy は build.rs も実行するため、bindgen 用の Clang ライブラリ（libclang と開発パッケージ）と C コンパイラが必要。確認済みの環境は libclang 19.1.7 と GCC 14.2.0。Clang のコマンドラインドライバは当該環境に未導入であり、libclang と区別する。
-- 専用 FFmpeg の構築には Bash、Git、C/C++ コンパイラ、CMake、Make、pkg-config、アセンブラ（NASM/Yasm）、および zlib・bzip2・xz/liblzma・libva の開発パッケージを用意する。配布物の取得に必要なネットワークと CA 証明書もコンテナ内で利用可能にする。
+- 専用 FFmpeg と dav1d の構築には Bash、Git、C/C++ コンパイラ、CMake、Meson、Ninja、Make、pkg-config、NASM、および zlib・bzip2・xz/liblzma・libva の開発パッケージを用意する。配布物の取得に必要なネットワークと CA 証明書もコンテナ内で利用可能にする。
 
 ## 専用 FFmpeg
 
@@ -28,12 +28,12 @@ export SUSUKI_FFMPEG_PREFIX="$PWD/dist/ffmpeg-lint"
 
 ### Windows 版の依存ライブラリの更新確認
 
-Windows 版をビルドする前に、専用 FFmpeg に静的に組み込む依存ライブラリ (ffmpeg.lock の `ZLIB_*`・`BZIP2_*`・`XZ_*`) が上流の最新安定版か確認する。
+Windows 版をビルドする前に、専用 FFmpeg に静的に組み込む依存ライブラリ (ffmpeg.lock の `ZLIB_*`・`BZIP2_*`・`XZ_*`・`DAV1D_*`) が上流の最新安定版か確認する。
 Windows 版にはこれらがそのまま同梱されるため、古い版のままだと修正済みの脆弱性を配布することになる。
 
 ```bash
 source ffmpeg.lock
-for repo in "$ZLIB_REPO" "$BZIP2_REPO" "$XZ_REPO"; do
+for repo in "$ZLIB_REPO" "$BZIP2_REPO" "$XZ_REPO" "$DAV1D_REPO"; do
     git ls-remote --tags --refs "$repo" | sed 's#.*refs/tags/##' | grep -Eiv 'rc|alpha|beta|pre' | sort -V | tail -n1
 done
 ```

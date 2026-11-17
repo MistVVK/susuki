@@ -399,7 +399,20 @@ impl DecoderEngine {
         };
 
         let par = unsafe { (*stream_at(fmt, video_index as usize)).codecpar };
-        let vcodec = unsafe { sys::avcodec_find_decoder((*par).codec_id) };
+        // AV1 の native decoder はハードウェア専用。CPU は dav1d、GPU は native を
+        // 明示して、FFmpeg の登録順で意図しないデコーダーが選ばれることを防ぐ。
+        let vcodec = unsafe {
+            if (*par).codec_id == sys::AVCodecID_AV_CODEC_ID_AV1 {
+                let name = if chosen == BackendKind::Cpu {
+                    c"libdav1d"
+                } else {
+                    c"av1"
+                };
+                sys::avcodec_find_decoder_by_name(name.as_ptr())
+            } else {
+                sys::avcodec_find_decoder((*par).codec_id)
+            }
+        };
         if vcodec.is_null() {
             unsafe { cleanup_live(fmt, iobuf, io_ptr) };
             return Err(DecodeError::Unsupported(format!(

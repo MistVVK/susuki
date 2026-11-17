@@ -36,6 +36,11 @@ adapted to Rust as derivative works (see LICENSES/README.md).
   MIT
   MMT/TLV support (v0.2.0 plus the pinned patches).
 
+* dav1d — https://code.videolan.org/videolan/dav1d
+  Copyright (c) 2018-2025, VideoLAN and dav1d authors
+  BSD-2-Clause
+  AV1 software decoding (1.5.4, pinned in ffmpeg.lock).
+
 * nv-codec-headers — https://github.com/FFmpeg/nv-codec-headers
   Copyright (C) FFmpeg/nv-codec-headers contributors
   MIT (headers only, NVDEC builds).

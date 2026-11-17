@@ -22,8 +22,8 @@ TARGET_OS="${TARGET_OS:-linux}"
 CROSS=x86_64-w64-mingw32-
 
 case "$TARGET_OS" in
-    linux) tools=(git cmake make pkg-config gcc readelf) ;;
-    windows) tools=(git cmake make pkg-config "${CROSS}gcc" "${CROSS}g++" "${CROSS}objdump") ;;
+    linux) tools=(git cmake meson ninja make pkg-config nasm gcc readelf) ;;
+    windows) tools=(git cmake meson ninja make pkg-config nasm "${CROSS}gcc" "${CROSS}g++" "${CROSS}objdump") ;;
     *) echo "error: unknown TARGET_OS '$TARGET_OS' (linux|windows)" >&2; exit 1 ;;
 esac
 for tool in "${tools[@]}"; do
@@ -97,6 +97,34 @@ if [[ "$TARGET_OS" == windows ]]; then
     cp "$("${CROSS}g++" -print-file-name=libstdc++.a)" "$DEPS/lib/"
 fi
 
+# AV1 の CPU 解析には dav1d が必要。両 OS で同じ固定版を静的に FFmpeg へ組み込み、
+# 配布先のシステムライブラリや DLL の有無に動作を依存させない。
+fetch_pinned "$DAV1D_REPO" "$DAV1D_TAG" "$DAV1D_COMMIT" "$BUILD_DIR/dav1d"
+meson_cross=()
+if [[ "$TARGET_OS" == windows ]]; then
+    # Meson が Linux のコンパイラや pkg-config を誤って選ばないよう、対象を明示する。
+    cat > "$BUILD_DIR/dav1d-cross.ini" <<EOF
+[binaries]
+c = '${CROSS}gcc'
+ar = '${CROSS}ar'
+strip = '${CROSS}strip'
+windres = '${CROSS}windres'
+[host_machine]
+system = 'windows'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+[properties]
+needs_exe_wrapper = true
+EOF
+    meson_cross=(--cross-file "$BUILD_DIR/dav1d-cross.ini")
+fi
+meson setup "$BUILD_DIR/dav1d-build" "$BUILD_DIR/dav1d" "${meson_cross[@]}" \
+    --prefix "$PREFIX" --libdir lib --default-library static --buildtype release \
+    -Db_staticpic=true -Denable_tools=false -Denable_tests=false -Denable_examples=false -Denable_docs=false
+meson compile -C "$BUILD_DIR/dav1d-build" -j "$JOBS"
+meson install -C "$BUILD_DIR/dav1d-build"
+
 # 1) libaribtlv (静的、FFmpeg に組み込み。MIT)
 fetch_pinned "$LIBARIBTLV_REPO" "$LIBARIBTLV_TAG" "$LIBARIBTLV_COMMIT" "$BUILD_DIR/libaribtlv"
 cmake -S "$BUILD_DIR/libaribtlv" -B "$BUILD_DIR/libaribtlv-build" ${cmake_target[@]+"${cmake_target[@]}"} \
@@ -143,6 +171,7 @@ configure_args=(
     --pkg-config-flags=--static
     # 基盤設定 (Kikyo build-cm-analysis.sh の CM 解析設定を基礎)
     --disable-autodetect
+    --enable-libdav1d
     --disable-debug
     --disable-doc
     --disable-programs          # fftools 除外 §10.2
@@ -262,7 +291,7 @@ fi
         MPEGTS_DEMUXER MPEGTSRAW_DEMUXER MXF_DEMUXER LIBARIBTLV_DEMUXER \
         MATROSKA_DEMUXER OGG_DEMUXER MOV_DEMUXER \
         MPEG1VIDEO_DECODER MPEG2VIDEO_DECODER MPEG4_DECODER H264_DECODER HEVC_DECODER \
-        AV1_DECODER VP9_DECODER THEORA_DECODER \
+        AV1_DECODER LIBDAV1D_DECODER VP9_DECODER THEORA_DECODER \
         AAC_DECODER MP3FLOAT_DECODER AC3_DECODER ALAC_DECODER VORBIS_DECODER OPUS_DECODER \
         PCM_S16LE_DECODER PCM_S16BE_DECODER PCM_S24LE_DECODER PCM_S24BE_DECODER \
         PCM_S32LE_DECODER PCM_S32BE_DECODER PCM_U8_DECODER \

@@ -13,7 +13,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # include paths when generating the FFmpeg bindings.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        build-essential git cmake pkg-config nasm libclang-dev \
+        build-essential git cmake meson ninja-build pkg-config nasm libclang-dev \
         clang \
         gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 binutils-mingw-w64-x86-64 \
         wine wine64 7zip curl ca-certificates file \
