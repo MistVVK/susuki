@@ -51,6 +51,9 @@ fn main() {
         .allowlist_var("SWR.*")
         .allowlist_var("FF.*")
         .derive_debug(true)
+        // FFmpeg ヘッダーの C サンプルは Rust の doctest ではないため、
+        // 生成 FFI には転記しない。手書き Rust の doctest は有効に保つ。
+        .generate_comments(false)
         .layout_tests(false);
     let bindings = builder
         .generate()
