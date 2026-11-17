@@ -44,7 +44,7 @@ in `crates/susuki/build.rs`, design §7.5 / §10.3).
 | Component | Repository | Pinned | License | Notes |
 |-----------|------------|--------|---------|-------|
 | FFmpeg 8.1.2 | https://github.com/FFmpeg/FFmpeg | tag `n8.1.2` (commit `38b88335f99e76ed89ff3c93f877fdefce736c13`) | LGPL-2.1-or-later | built **LGPL configuration** (`--disable-gpl`, see `scripts/ffmpeg-build.sh`); demuxers/decoders only, shared libraries |
-| dav1d 1.5.4 | https://code.videolan.org/videolan/dav1d | `54706fc6bc0cdecab7e9593974a4039cc038fca7` | BSD-2-Clause | AV1 software decoder, statically linked into FFmpeg |
+| dav1d 1.5.5 | https://code.videolan.org/videolan/dav1d | `6c7bee685677fd997a431302be4fea8ea4017606` | BSD-2-Clause | AV1 software decoder, statically linked into FFmpeg |
 | libaribtlv v0.2.0 | https://github.com/makeding/libaribtlv | `91bafe32479141c660a334cc03aed1f9869a18a5` | MIT | MMT/TLV demuxer dependency |
 | ffmpeg-libaribtlv patches | https://github.com/makeding/ffmpeg-libaribtlv | `29cc14822fae9cb8cd06bbfdd584d06aa7a6a1fa` | MIT | `vendor/patches/ffmpeg-8.1.2/0001..0003`, SHA256 pinned in `ffmpeg.lock` |
 | ffnvcodec headers | https://github.com/FFmpeg/nv-codec-headers | see `ffmpeg.lock` | MIT | NVDEC build headers only |

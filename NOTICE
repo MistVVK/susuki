@@ -39,7 +39,7 @@ adapted to Rust as derivative works (see LICENSES/README.md).
 * dav1d — https://code.videolan.org/videolan/dav1d
   Copyright (c) 2018-2025, VideoLAN and dav1d authors
   BSD-2-Clause
-  AV1 software decoding (1.5.4, pinned in ffmpeg.lock).
+  AV1 software decoding (1.5.5, pinned in ffmpeg.lock).
 
 * nv-codec-headers — https://github.com/FFmpeg/nv-codec-headers
   Copyright (C) FFmpeg/nv-codec-headers contributors
