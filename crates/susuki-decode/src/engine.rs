@@ -36,6 +36,8 @@ pub struct InputSpec {
     /// send/receive are counted and skipped instead of aborting the run
     /// (design §4.4 keeps fatal behavior as the default).
     pub tolerate_decode_errors: bool,
+    /// 音声だけの欠落を許容する。映像 decode の安全条件は変更しない。
+    pub tolerate_audio_decode_errors: bool,
 }
 
 /// Metadata for JSON input/decode blocks (§9.2) and §4.5 selection reasons.
@@ -157,12 +159,15 @@ pub struct DecoderEngine {
     pub fallback_reason: Option<String>,
     video_index: i32,
     audio_index: Option<i32>,
-    /// 初回に選択した TS program。以後の PMT 変更で誤った PID を解析しない。
+    /// 初回に選択した TS program と映像・音声の識別子。選択対象の変更を検出する。
     mpegts_program: Option<MPEGTSProgram>,
+    mpegts_selected_streams: Vec<MPEGTSSelectedStream>,
     /// TLV 初回 probe 後の stream 総数。追加された track を見逃さない。
     tlv_stream_count: Option<u32>,
-    /// 最初の復号フレームで確定した構成。変化時は結果を出さず失敗する。
+    /// 直前の映像構成。寸法・pixel format・range は固定し、色記述は連続区間を分ける。
     video_configuration: Option<VideoConfiguration>,
+    /// 色記述の変化回数。解析側が異なる区間のフレームを比較しないために使う。
+    video_color_epoch: u64,
     frame_index: i64,
     interrupt: Arc<AtomicBool>,
     queued: VecDeque<FrameEvent>,
@@ -170,6 +175,7 @@ pub struct DecoderEngine {
     video_done: bool,
     audio_done: bool,
     tolerate_decode_errors: bool,
+    tolerate_audio_decode_errors: bool,
     decode_errors_skipped: u64,
 }
 
@@ -536,6 +542,17 @@ impl DecoderEngine {
             None
         };
 
+        // PMT version や字幕などの変更と、解析する映像・音声の変更を区別する。
+        // FFmpeg の probe は先の PMT を読んだ後に先頭へ戻るため、version 自体は固定できない。
+        let mpegts_selected_streams = if mpegts_program.is_some() {
+            std::iter::once(video_index)
+                .chain(audio_index)
+                .map(|index| MPEGTSSelectedStream::from_stream(fmt, index))
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         Ok(DecoderEngine {
             fmt,
             iobuf,
@@ -551,8 +568,10 @@ impl DecoderEngine {
             video_index,
             audio_index,
             mpegts_program,
+            mpegts_selected_streams,
             tlv_stream_count,
             video_configuration: None,
+            video_color_epoch: 0,
             frame_index: 0,
             interrupt,
             queued: VecDeque::new(),
@@ -560,6 +579,7 @@ impl DecoderEngine {
             video_done: false,
             audio_done: audio_index.is_none(),
             tolerate_decode_errors: spec.tolerate_decode_errors,
+            tolerate_audio_decode_errors: spec.tolerate_audio_decode_errors,
             decode_errors_skipped: 0,
         })
     }
@@ -597,13 +617,12 @@ impl DecoderEngine {
                 return Err(error);
             }
             if rc == 0 {
-                let si = unsafe { (*pkt).stream_index };
-                if si == self.video_index || Some(si) == self.audio_index {
-                    if let Err(error) = self.validate_mpegts_program() {
-                        unsafe { sys::av_packet_free(&mut pkt) };
-                        return Err(error);
-                    }
+                // 選択以外の packet でも PMT が変わり得るため、選択 PID の消失を見逃さない。
+                if let Err(error) = self.validate_mpegts_program() {
+                    unsafe { sys::av_packet_free(&mut pkt) };
+                    return Err(error);
                 }
+                let si = unsafe { (*pkt).stream_index };
                 if si == self.video_index {
                     if self.pump_video(pkt)? {
                         self.video_done = true;
@@ -655,14 +674,20 @@ impl DecoderEngine {
         Ok(())
     }
 
-    /// PMT の変更は解析対象が途中で入れ替わる可能性があるため結果を公開しない。
+    /// PMT 更新のうち、解析対象の PID・codec が変わった場合は結果を公開しない。
     fn validate_mpegts_program(&self) -> Result<(), DecodeError> {
         if let Some(expected) = &self.mpegts_program {
             let current = select_mpegts_program(self.fmt, expected.service)?;
-            if &current != expected {
-                return Err(DecodeError::Unsupported(
-                    "MPEG-TS service changed during analysis".into(),
-                ));
+            // 字幕やデータ放送、PMT version だけの変更は映像・音声の入れ替わりではない。
+            // 選択した全 stream が同じサービスに残り、PID と codec が不変か確認する。
+            for stream in &self.mpegts_selected_streams {
+                if !current.streams.contains(&(stream.index as usize))
+                    || MPEGTSSelectedStream::from_stream(self.fmt, stream.index) != *stream
+                {
+                    return Err(DecodeError::Unsupported(
+                        "MPEG-TS service changed during analysis".into(),
+                    ));
+                }
             }
         }
         Ok(())
@@ -725,7 +750,14 @@ impl DecoderEngine {
         };
         let rc = unsafe { sys::avcodec_send_packet(adec, pkt) };
         if rc < 0 && rc != sys::averror_eagain() && rc != sys::averror_eof() {
-            if self.tolerate_decode_errors {
+            // 固定版 FFmpeg 8 の AAC は破損入力で decode_pce の -1 や
+            // adts_header.h の AAC_PARSE_ERROR_* を直接返す。他の codec には適用しない。
+            let invalid_aac = unsafe { (*adec).codec_id == sys::AVCodecID_AV_CODEC_ID_AAC }
+                && matches!(rc, -1 | -0x1030c0a | -0x3030c0a | -0x4030c0a);
+            if self.tolerate_decode_errors
+                || (self.tolerate_audio_decode_errors
+                    && (rc == sys::averror_invaliddata() || invalid_aac))
+            {
                 // Same tolerance as pump_video: one corrupt audio packet
                 // (common in broadcast captures) must not abort the run.
                 self.note_decode_error("audio", "send", rc);
@@ -752,7 +784,13 @@ impl DecoderEngine {
                 break;
             } else if rc < 0 {
                 unsafe { sys::av_frame_free(&mut frame) };
-                if self.tolerate_decode_errors {
+                // 同じ AAC の破損入力エラーは受信経路でも返り得る。
+                let invalid_aac = unsafe { (*adec).codec_id == sys::AVCodecID_AV_CODEC_ID_AAC }
+                    && matches!(rc, -1 | -0x1030c0a | -0x3030c0a | -0x4030c0a);
+                if self.tolerate_decode_errors
+                    || (self.tolerate_audio_decode_errors
+                        && (rc == sys::averror_invaliddata() || invalid_aac))
+                {
                     self.note_decode_error("audio", "receive", rc);
                     break;
                 }
@@ -786,14 +824,28 @@ impl DecoderEngine {
         self.decode_errors_skipped += 1;
     }
 
-    /// Number of decode errors skipped because --tolerate-decode-errors was given.
+    /// Number of decode errors skipped by an explicit tolerance option.
     pub fn decode_errors_skipped(&self) -> u64 {
         self.decode_errors_skipped
     }
 
+    /// 解析中に色記述が切り替わった回数。
+    pub fn video_color_changes(&self) -> u64 {
+        self.video_color_epoch
+    }
+
     /// 入力ストリームの時間基準で PTS をマイクロ秒へ変換する。
     fn timestamp_us(&self, frame: *mut sys::AVFrame, stream_index: i32) -> Option<i64> {
-        let pts = unsafe { (*frame).pts };
+        // 映像は FFmpeg が PTS と DTS の不整合を考慮した表示時刻を優先する。
+        // 放送 TS では一部の復号フレームだけ PTS が逆行することがあり、単純な PTS では
+        // 実際の表示順を誤る。音声は従来どおりサンプルの PTS を使う。
+        let pts = unsafe {
+            if stream_index == self.video_index && (*frame).best_effort_timestamp != i64::MIN {
+                (*frame).best_effort_timestamp
+            } else {
+                (*frame).pts
+            }
+        };
         let time_base = unsafe { (*stream_at(self.fmt, stream_index as usize)).time_base };
         if pts == i64::MIN || time_base.num <= 0 || time_base.den <= 0 {
             return None;
@@ -805,8 +857,8 @@ impl DecoderEngine {
 
     /// §4.2 hw->system transfer + §6.0 luma + §5.1 sequential index.
     fn emit_frame(&mut self, frame: *mut sys::AVFrame) -> Result<FrameEvent, DecodeError> {
-        // 解像度・pixel format・色記述が途中で変わると、固定ロゴや輝度を
-        // 同じ条件で解析できない。復号中の全フレームで初回構成と照合する。
+        // 解像度・pixel format・range の変化は固定ロゴや輝度の座標・値を変える。
+        // 色記述だけの変化は native luma をそのまま解析し、境界の比較を分離する。
         let configuration = unsafe {
             VideoConfiguration {
                 width: (*frame).width,
@@ -818,13 +870,35 @@ impl DecoderEngine {
                 colorspace: (*frame).colorspace,
             }
         };
-        if self
-            .video_configuration
-            .is_some_and(|initial| initial != configuration)
-        {
-            return Err(DecodeError::Unsupported(
-                "video configuration changed during analysis".into(),
-            ));
+        if let Some(previous) = self.video_configuration {
+            if (
+                previous.width,
+                previous.height,
+                previous.format,
+                previous.color_range,
+            ) != (
+                configuration.width,
+                configuration.height,
+                configuration.format,
+                configuration.color_range,
+            ) {
+                return Err(DecodeError::Unsupported(
+                    "video geometry, pixel format or range changed during analysis".into(),
+                ));
+            }
+            // 色記述の異なる画面の差をシーン変化と誤認しない。
+            // ロゴは各フレームの native luma で独立に検出し、変更自体も結果に警告する。
+            if (
+                previous.color_primaries,
+                previous.color_trc,
+                previous.colorspace,
+            ) != (
+                configuration.color_primaries,
+                configuration.color_trc,
+                configuration.colorspace,
+            ) {
+                self.video_color_epoch += 1;
+            }
         }
         self.video_configuration = Some(configuration);
 
@@ -866,6 +940,7 @@ impl DecoderEngine {
             index,
             pts: unsafe { (*frame).pts },
             pts_us: self.timestamp_us(frame, self.video_index),
+            color_epoch: self.video_color_epoch,
             // 最終フレームの表示終端に使う。時刻基準が不明なら None のまま渡す。
             duration_us: {
                 let duration = unsafe { (*frame).duration };
@@ -921,15 +996,35 @@ unsafe fn cleanup_live(
     let _ = Box::from_raw(io_ptr);
 }
 
+/// 選択済み stream の PID と codec。FFmpeg が同じ index を更新しても検出する。
+#[derive(Debug, PartialEq, Eq)]
+struct MPEGTSSelectedStream {
+    index: i32,
+    pid: i32,
+    codec: sys::AVCodecID,
+}
+
+impl MPEGTSSelectedStream {
+    fn from_stream(fmt: *mut sys::AVFormatContext, index: i32) -> Self {
+        // index は選択時または既に検証済みの program から取得されている。
+        let stream = stream_at(fmt, index as usize);
+        unsafe {
+            Self {
+                index,
+                pid: (*stream).id,
+                codec: (*(*stream).codecpar).codec_id,
+            }
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct MPEGTSProgram {
     service: i64,
-    pmt_pid: i32,
-    pmt_version: i32,
     streams: Vec<usize>,
 }
 
-/// 指定された MPEG-TS サービスに属する stream index と PMT 世代を確定する。
+/// 指定された MPEG-TS サービスに属する stream index を確定する。
 fn select_mpegts_program(
     fmt: *mut sys::AVFormatContext,
     service: i64,
@@ -980,8 +1075,6 @@ fn select_mpegts_program(
             indexes.dedup();
             found = Some(MPEGTSProgram {
                 service,
-                pmt_pid: (*program).pmt_pid,
-                pmt_version: (*program).pmt_version,
                 streams: indexes,
             });
         }

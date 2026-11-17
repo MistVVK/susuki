@@ -66,6 +66,8 @@ pub struct DecodeConfig {
     pub mpegts_service: Option<i64>,
     /// --tolerate-decode-errors: skip per-packet decode errors instead of aborting
     pub tolerate_decode_errors: bool,
+    /// 映像を厳格に保ち、破損した音声 packet のみを欠落として扱う。
+    pub tolerate_audio_decode_errors: bool,
     /// --expected-duration: 期待される番組尺 (秒)。映像パケットが先に枯れた録画でも
     /// 解析タイムラインを期待尺まで延ばし、音声だけで続く後半の CM を検出できるようにする。
     pub expected_duration: Option<f64>,
@@ -344,6 +346,15 @@ where
                 }
                 p.mark_once("--tolerate-decode-errors")?;
                 p.opts.decode.tolerate_decode_errors = true;
+            }
+            "--tolerate-audio-decode-errors" => {
+                if inline.is_some() {
+                    return Err(ArgError(
+                        "--tolerate-audio-decode-errors takes no value".to_string(),
+                    ));
+                }
+                p.mark_once("--tolerate-audio-decode-errors")?;
+                p.opts.decode.tolerate_audio_decode_errors = true;
             }
             "--backend" => {
                 p.mark_once("--backend")?;

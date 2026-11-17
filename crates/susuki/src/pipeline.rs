@@ -246,6 +246,7 @@ fn spec_from_cli(opts: &Options) -> InputSpec {
         tlv_service: opts.decode.tlv_service,
         mpegts_service: opts.decode.mpegts_service,
         tolerate_decode_errors: opts.decode.tolerate_decode_errors,
+        tolerate_audio_decode_errors: opts.decode.tolerate_audio_decode_errors,
     };
     match opts.decode.video_stream {
         Some(StreamSel::Ordinal(n)) => spec.video_ordinal = Some(n),
@@ -454,7 +455,14 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
     // 次の PTS が来るまで直前の画像を保持し、表示期間内の格子へ複製する。
     // 元フレーム全体を蓄積せず、音声・映像・ロゴを同じ実時間の格子で解析する。
     let mut pending_frame: Option<DecodedFrame> = None;
+    let mut previous_color_epoch: Option<u64> = None;
     let mut push_video = |f: &DecodedFrame, index: i64| {
+        // 色記述が変わる境界は異なる信号条件の差を scene と誤認しない。
+        // ロゴは元の各フレームから個別に評価し、音声・映像の時間軸は維持する。
+        if previous_color_epoch.is_some_and(|previous| previous != f.color_epoch) {
+            runner.prev = None;
+        }
+        previous_color_epoch = Some(f.color_epoch);
         logos.push_frame(&f.luma);
         let small = Arc::new(downscale(&f.luma, s));
         if runner.lx != small.width || runner.ly != small.height {
@@ -685,6 +693,7 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
         gpu_unsupported: engine.gpu_unsupported,
         fallback_reason: engine.fallback_reason.clone(),
         decode_errors_skipped: engine.decode_errors_skipped(),
+        video_color_changes: engine.video_color_changes(),
         video_start_us: timeline.video_origin_us().expect("first video PTS"),
     };
     let code = write_outputs(
@@ -732,6 +741,10 @@ fn write_outputs(
     }
     if decode.decode_errors_skipped > 0 {
         warnings.push("decode_errors_skipped");
+    }
+    // ロゴ検出も signal の色記述変化をまたぐため、結果の利用者へ明示する。
+    if decode.video_color_changes > 0 {
+        warnings.push("video_color_configuration_changed");
     }
 
     let scene_changes: Vec<(i64, bool)> = {
@@ -928,5 +941,6 @@ struct DecodeMeta {
     gpu_unsupported: bool,
     fallback_reason: Option<String>,
     decode_errors_skipped: u64,
+    video_color_changes: u64,
     video_start_us: i64,
 }

@@ -143,12 +143,19 @@ susuki INPUT.ts --no-logo --output-stdout json
 - 無音判定は選択した1本の音声を元サンプルレートで解析し、全チャンネルの
   全サンプルの s16 換算最大振幅を `--mute-threshold` と比較する。
   ダウンミックスやリサンプルは行わない。
-- 可変フレームレートの映像は、先頭映像 PTS を原点とする公称 fps の格子へ、
+- 可変フレームレートの映像は、先頭映像の表示時刻を原点とする公称 fps の格子へ、
   実際の表示時刻に応じて複製・間引きして解析する。音声とロゴも同じ実時間軸に揃う。
-  JSON の `input.total_frames` と各 `*_frame` はこの解析格子の番号であり、
-  可変フレームレート入力の元フレーム番号ではない。秒数は先頭映像基準で、格子への
-  丸め誤差を含む。コンテナの開始時刻との関係は `format_start_us` と
-  `video_start_us` で確認する。PTS の欠落・逆行・重複や 5 秒超の間隔は拒否する。
+  FFmpeg が PTS と DTS から選んだ表示時刻を優先する。JSON の `input.total_frames` と
+  各 `*_frame` はこの解析格子の番号であり、可変フレームレート入力の元フレーム番号ではない。
+  秒数は先頭映像基準で、格子への丸め誤差を含む。コンテナの開始時刻との関係は
+  `format_start_us` と `video_start_us` で確認する。表示時刻の欠落・逆行・重複や
+  5 秒超の間隔は拒否する。
+- `--tolerate-audio-decode-errors` は破損した音声 packet を読み飛ばす。欠落区間は
+  無音と判定せず、映像やメモリ不足などの異常は引き続き失敗する。読み飛ばしがあれば
+  JSON の `warnings` に `decode_errors_skipped` を記録する。
+- 色記述だけが変化した場合、各フレームの native luma で解析し、境界のフレーム同士を
+  比較しない。結果には `video_color_configuration_changed` を記録する。ロゴの判定は
+  色記述が変化した区間でも同じ候補ロゴを使うため、結果の確認が必要。
 - 出力は `--output-json` / `--output-chapter` / `--output-div` /
   `--output-stdout json|chapter` のいずれか 1 つ以上。既存ファイルへの
   上書きは `--overwrite` を除き終了コード 2。

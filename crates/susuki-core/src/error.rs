@@ -24,6 +24,8 @@ pub enum WarnCode {
     NoLogoDetected,
     InputChanged,
     AnalysisGpuFallback,
+    DecodeErrorsSkipped,
+    VideoColorConfigurationChanged,
 }
 
 impl WarnCode {
@@ -35,6 +37,8 @@ impl WarnCode {
             WarnCode::NoLogoDetected => "no_logo_detected",
             WarnCode::InputChanged => "input_changed",
             WarnCode::AnalysisGpuFallback => "analysis_gpu_fallback",
+            WarnCode::DecodeErrorsSkipped => "decode_errors_skipped",
+            WarnCode::VideoColorConfigurationChanged => "video_color_configuration_changed",
         }
     }
 }
