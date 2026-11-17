@@ -20,8 +20,8 @@ PATCH0004_SHA256=85f3648d2ac1878ae4d81d7032d9e1cdd835500e5a4f3fd2179ddd13b66c020
 
 # AV1 software decoder (BSD-2-Clause、Linux / Windows とも FFmpeg に静的リンク)
 DAV1D_REPO=https://code.videolan.org/videolan/dav1d.git
-DAV1D_TAG=1.5.4
-DAV1D_COMMIT=54706fc6bc0cdecab7e9593974a4039cc038fca7
+DAV1D_TAG=1.5.5
+DAV1D_COMMIT=6c7bee685677fd997a431302be4fea8ea4017606
 
 # ffnvcodec ヘッダ (NVDEC ビルド時依存、MIT で DFSG フリー、CUDA Toolkit 非依存 §10.7)
 NVCODEC_REPO=https://github.com/FFmpeg/nv-codec-headers
