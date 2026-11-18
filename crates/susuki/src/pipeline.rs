@@ -423,17 +423,28 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
     let pict_struct = 2;
     // §6.5/REQ-DC-006: auto/gpu try the Vulkan compute path; failure or
     // explicit cpu keeps CPU analysis (analysis-side fallback always allowed).
-    let mut gpu_engine = match opts.decode.analysis_backend {
+    // --analysis-device は解析演算のデバイスを固定する。auto でも指定デバイスを
+    // 使えない場合は明示 gpu と同じ扱いにし、警告で調査可能にする。
+    let explicit_gpu = matches!(opts.decode.analysis_backend, AnalysisBackend::Gpu)
+        || opts.decode.analysis_device.is_some();
+    let gpu_engine = match opts.decode.analysis_backend {
         AnalysisBackend::Cpu => None,
-        AnalysisBackend::Auto | AnalysisBackend::Gpu => susuki_core::gpu::GpuEngine::init(),
+        AnalysisBackend::Auto | AnalysisBackend::Gpu => {
+            match susuki_core::gpu::GpuEngine::init(opts.decode.analysis_device.as_ref()) {
+                Ok(engine) => Some(engine),
+                Err(failure) => {
+                    // auto の GPU 不在は通常選択（CPU 決定論）のため診断も出さない。
+                    if explicit_gpu {
+                        eprintln!("WARN\tanalysis\t{}", failure.message());
+                    }
+                    None
+                }
+            }
+        }
     };
-    // 明示 gpu で利用不能はフォールバック発生（§6.5 warnings）、auto の
-    // GPU 不在は通常選択（CPU 決定論）なので警告を立てない。
-    let gpu_init_fallback =
-        matches!(opts.decode.analysis_backend, AnalysisBackend::Gpu) && gpu_engine.is_none();
-    if gpu_init_fallback {
-        gpu_engine = None;
-    }
+    // 明示 gpu またはデバイス指定で利用不能はフォールバック発生（§6.5 warnings）、
+    // auto の GPU 不在は通常選択（CPU 決定論）なので警告を立てない。
+    let gpu_init_fallback = explicit_gpu && gpu_engine.is_none();
     let mut runner = Runner {
         feats: Vec::new(),
         prev: None,

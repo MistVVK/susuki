@@ -3,7 +3,7 @@
 // The decode backends differ per platform (Unix: NVDEC/VAAPI, Windows:
 // D3D11VA); everything else is shared text.
 macro_rules! usage {
-    ($backend:literal, $device:literal) => {
+    ($backend:literal, $device:literal, $analysis_device:literal) => {
         concat!(
             r#"susuki - CM interval detection CLI
 
@@ -33,6 +33,9 @@ DECODE OPTIONS:
             $device,
             r#"
     --analysis-backend NAME      auto|cpu|gpu (analysis compute, see design 6.5)
+    --analysis-device SPEC       "#,
+            $analysis_device,
+            r#"
     --tolerate-decode-errors     skip corrupt packets (decode errors) instead of aborting
     --tolerate-audio-decode-errors  skip corrupt audio packets while keeping video strict
     --tolerate-video-gaps        mark bounded missing video as unknown, not still or logo-off
@@ -79,7 +82,12 @@ EXIT CODES: 0 ok | 2 argument error | 3 io error | 4 input unsupported |
 #[cfg(unix)]
 pub const USAGE: &str = usage!(
     "auto|nvdec|vaapi|cpu",
-    "VAAPI: DRM render node; NVDEC: CUDA device number"
+    "VAAPI: DRM render node; NVDEC: CUDA device number",
+    "DRM render node path or 0-based Vulkan adapter index; fixes the analysis\n                                 GPU (not with --analysis-backend cpu)"
 );
 #[cfg(windows)]
-pub const USAGE: &str = usage!("auto|d3d11va|cpu", "D3D11VA: DXGI adapter number");
+pub const USAGE: &str = usage!(
+    "auto|d3d11va|cpu",
+    "D3D11VA: DXGI adapter number",
+    "0-based Vulkan adapter index; fixes the analysis GPU (not with\n                                 --analysis-backend cpu)"
+);

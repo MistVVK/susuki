@@ -176,6 +176,10 @@ susuki INPUT.ts --no-logo --output-stdout json
   `warnings` に `analysis_gpu_fallback` を記録)。CPU/GPU 間の結果は設計書
   §6.5 の許容誤差規範に従う (現実装はビット一致)。GPU デコード
   (`--backend nvdec|vaapi`) とは独立の経路。
+  `--analysis-device` (Linux: DRM render ノードのパス、Windows: 番号) で
+  解析に使う Vulkan デバイスを固定できる。Intel (anv)・AMD (RADV・AMDVLK)・
+  NVIDIA のどれも、render ノードの対応づけは VK_EXT_physical_device_drm
+  (なければ sysfs の PCI アドレスと VK_EXT_pci_bus_info) で行う。
 - 詳細な挙動・全オプションは `susuki --help` と設計規範书が正本。
 
 ## 安全性 (v1)

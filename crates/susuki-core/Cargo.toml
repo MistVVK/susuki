@@ -9,4 +9,6 @@ description = "susuki internal component crate"
 [dependencies]
 susuki-logo-file.workspace = true
 wgpu.workspace = true
+wgpu-hal.workspace = true
+ash.workspace = true
 pollster.workspace = true

@@ -5,6 +5,8 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use susuki_core::gpu::AnalysisDevice;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Backend {
     #[default]
@@ -60,6 +62,8 @@ pub struct DecodeConfig {
     pub backend: Backend,
     pub device: Option<String>,
     pub analysis_backend: AnalysisBackend,
+    /// --analysis-device: 解析演算に使う Vulkan デバイス。None は自動選択。
+    pub analysis_device: Option<AnalysisDevice>,
     pub video_stream: Option<StreamSel>,
     pub audio_stream: Option<AudioStreamSel>,
     pub tlv_service: Option<i64>,
@@ -212,6 +216,30 @@ fn parse_float(v: &OsStr, name: &str) -> Result<f64, ArgError> {
     } else {
         Err(ArgError(format!(
             "option {name}: number must be finite, got {s:?}"
+        )))
+    }
+}
+
+/// --analysis-device の値を解析する。数字列は 0 始まりのアダプター番号、
+/// それ以外は (unix) DRM render ノードのパス。Windows は番号だけを受理する。
+fn parse_analysis_device_spec(val: &str) -> Result<AnalysisDevice, ArgError> {
+    if !val.is_empty() && val.chars().all(|c| c.is_ascii_digit()) {
+        // u32 の範囲を超える番号は引数エラーにする。
+        let index = val.parse::<u32>().map_err(|_| {
+            ArgError(format!(
+                "option --analysis-device: adapter index out of range: {val:?}"
+            ))
+        })?;
+        return Ok(AnalysisDevice::Index(index));
+    }
+    #[cfg(unix)]
+    {
+        Ok(AnalysisDevice::RenderNode(PathBuf::from(val)))
+    }
+    #[cfg(windows)]
+    {
+        Err(ArgError(format!(
+            "option --analysis-device: expected a 0-based adapter index, got {val:?}"
         )))
     }
 }
@@ -421,6 +449,18 @@ where
                     }
                 };
             }
+            "--analysis-device" => {
+                p.mark_once("--analysis-device")?;
+                let val = os_to_str(&take_value(flag, inline, &mut it)?)?;
+                // unix の render ノードは他のパス系オプションと同じく絶対パスへ揃える。
+                p.opts.decode.analysis_device = Some(match parse_analysis_device_spec(&val)? {
+                    #[cfg(unix)]
+                    AnalysisDevice::RenderNode(node) => {
+                        AnalysisDevice::RenderNode(absolutize(cwd, &node))
+                    }
+                    spec => spec,
+                });
+            }
             "--mute-threshold" => {
                 p.mark_once("--mute-threshold")?;
                 let val = take_value(flag, inline, &mut it)?;
@@ -603,6 +643,11 @@ fn validate(o: &Options) -> Result<(), ArgError> {
     if o.decode.device.is_some() && o.decode.backend == Backend::Cpu {
         return Err(ArgError(
             "--device cannot be used with --backend cpu".to_string(),
+        ));
+    }
+    if o.decode.analysis_device.is_some() && o.decode.analysis_backend == AnalysisBackend::Cpu {
+        return Err(ArgError(
+            "--analysis-device cannot be used with --analysis-backend cpu".to_string(),
         ));
     }
     if o.output.json.is_none() && o.output.chapter.is_none() && o.output.stdout.is_none() {

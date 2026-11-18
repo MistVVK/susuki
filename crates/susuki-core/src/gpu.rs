@@ -4,6 +4,71 @@
 //! Vulkan device, init, shader compile, map_async) falls back to the CPU
 //! path and the caller records `warnings: analysis_gpu_fallback`.
 
+#[cfg(unix)]
+use std::path::{Path, PathBuf};
+
+/// `--analysis-device`: 解析演算に使う Vulkan デバイスの指定 (§7)。
+/// デコード (`--device`) とは独立で、Susuki 自身の列挙順と DRM 経由の対応付けだけを使う。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnalysisDevice {
+    /// 列挙された Vulkan デバイスの 0 始まりの番号。
+    Index(u32),
+    /// DRM render ノードのパス。VK_EXT_physical_device_drm (なければ
+    /// VK_EXT_pci_bus_info + sysfs) で対応する Vulkan デバイスを選ぶ。
+    #[cfg(unix)]
+    RenderNode(PathBuf),
+}
+
+impl AnalysisDevice {
+    /// 診断行に載せる指定内容の要約。
+    ///
+    /// Args:
+    /// None
+    ///
+    /// Returns:
+    /// 指定内容を表す英語テキスト。
+    pub fn describe(&self) -> String {
+        match self {
+            AnalysisDevice::Index(index) => format!("adapter index {index}"),
+            #[cfg(unix)]
+            AnalysisDevice::RenderNode(path) => format!("render node {}", path.display()),
+        }
+    }
+}
+
+/// Vulkan 解析デバイスの初期化に失敗した理由。解析演算は失敗しても CPU へ
+/// フォールバックするため、エラー値ではなく呼び出しが診断に使う。
+#[derive(Debug, Clone)]
+pub enum GpuInitError {
+    /// Vulkan デバイスが 1 つも列挙されなかった。
+    NoVulkanDevice,
+    /// `--analysis-device` の指定がどの Vulkan デバイスにも一致しなかった。
+    DeviceNotFound(String),
+    /// デバイスの初期化 (shader 生成を含む) に失敗した。
+    Init(String),
+}
+
+impl GpuInitError {
+    /// 診断行向けの英語メッセージ。ログの文字化けを避けるため英語とする。
+    ///
+    /// Args:
+    /// None
+    ///
+    /// Returns:
+    /// 診断に使える英語の失敗理由。
+    pub fn message(&self) -> String {
+        match self {
+            GpuInitError::NoVulkanDevice => "no Vulkan compute device is available".to_string(),
+            GpuInitError::DeviceNotFound(spec) => {
+                format!("the requested analysis device ({spec}) matched no Vulkan adapter")
+            }
+            GpuInitError::Init(reason) => {
+                format!("Vulkan analysis device initialization failed: {reason}")
+            }
+        }
+    }
+}
+
 /// One 16px-wide block row: avgdist results for both frames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockStat {
@@ -74,28 +139,27 @@ pub struct GpuEngine {
 
 impl GpuEngine {
     /// Initialize a Vulkan compute device (cross-vendor requirement).
-    /// None => CPU path (caller adds `analysis_gpu_fallback` when gpu/auto).
-    pub fn init() -> Option<GpuEngine> {
+    /// Err(...) => CPU path (caller adds `analysis_gpu_fallback` when gpu/auto
+    /// was requested explicitly).
+    ///
+    /// Args:
+    /// device: `--analysis-device` の指定。None のときは要求ベースの高性能 GPU 選択。
+    ///
+    /// Returns:
+    /// 初期化済みの解析エンジン、または失敗理由。
+    pub fn init(device: Option<&AnalysisDevice>) -> Result<GpuEngine, GpuInitError> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
             ..Default::default()
         });
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        }))
-        .ok()?;
-        if !matches!(adapter.get_info().backend, wgpu::Backend::Vulkan) {
-            return None;
-        }
+        let adapter = select_adapter(&instance, device)?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("susuki-analysis"),
             required_features: wgpu::Features::empty(),
             required_limits: wgpu::Limits::downlevel_defaults(),
             ..Default::default()
         }))
-        .ok()?;
+        .map_err(|e| GpuInitError::Init(e.to_string()))?;
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("susuki-avgdist"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
@@ -232,7 +296,7 @@ impl GpuEngine {
             cache: None,
             compilation_options: Default::default(),
         });
-        Some(GpuEngine {
+        Ok(GpuEngine {
             device,
             queue,
             pipeline,
@@ -241,7 +305,179 @@ impl GpuEngine {
             logo_bgl,
         })
     }
+}
 
+/// `--analysis-device` の指定に従って Vulkan アダプターを 1 つ選ぶ。
+/// 戻り値は選択したアダプター、またはフォールバック理由。
+fn select_adapter(
+    instance: &wgpu::Instance,
+    device: Option<&AnalysisDevice>,
+) -> Result<wgpu::Adapter, GpuInitError> {
+    match device {
+        // 指定なしは従来どおり高性能 GPU を要求して選ぶ (§6.5)。
+        None => {
+            let adapter =
+                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    compatible_surface: None,
+                    force_fallback_adapter: false,
+                }))
+                .ok()
+                .ok_or(GpuInitError::NoVulkanDevice)?;
+            if !matches!(adapter.get_info().backend, wgpu::Backend::Vulkan) {
+                return Err(GpuInitError::NoVulkanDevice);
+            }
+            Ok(adapter)
+        }
+        // 指定ありは列挙一覧から選ぶ。wgpu の列挙は Vulkan の物理デバイス順を保存する。
+        Some(spec) => {
+            let adapters = instance.enumerate_adapters(wgpu::Backends::VULKAN);
+            let found = match spec {
+                AnalysisDevice::Index(index) => adapters.get(*index as usize).cloned(),
+                #[cfg(unix)]
+                AnalysisDevice::RenderNode(path) => {
+                    // パスが実在する render ノードでなければ対応付けを試みない。
+                    match render_node_identity(path) {
+                        Some(identity) => {
+                            let raw_instance =
+                                unsafe { instance.as_hal::<wgpu_hal::vulkan::Api>() };
+                            raw_instance.and_then(|raw_instance| {
+                                find_matching_adapter(
+                                    raw_instance.shared_instance().raw_instance(),
+                                    &adapters,
+                                    &identity,
+                                )
+                            })
+                        }
+                        None => None,
+                    }
+                }
+            };
+            found.ok_or_else(|| GpuInitError::DeviceNotFound(spec.describe()))
+        }
+    }
+}
+
+/// render ノードのパスから対応づけに使う識別子を求める (unix)。
+/// 対応づけは DRM の番号を最優先し、ドライバが DRM 拡張を報告しない場合に備えて
+/// sysfs の PCI BDF も読んでおく。
+#[cfg(unix)]
+struct RenderNodeIdentity {
+    /// stat(2) の rdev から復元した DRM major/minor。
+    major: i64,
+    minor: i64,
+    /// sysfs から読めた PCI BDF (domain, bus, device, function)。読めなければ None。
+    pci_bdf: Option<(u32, u32, u32, u32)>,
+}
+
+/// render ノードのパスを識別子へ変換する。パスが存在しない・キャラクターデバイスで
+/// ない場合は None (呼び出し側はフォールバックとして扱う)。
+#[cfg(unix)]
+fn render_node_identity(path: &Path) -> Option<RenderNodeIdentity> {
+    use std::os::unix::fs::FileTypeExt;
+    let metadata = std::fs::metadata(path).ok()?;
+    // /dev/dri の render ノードはキャラクターデバイス。通常ファイルなどは指定違い。
+    if !metadata.file_type().is_char_device() {
+        return None;
+    }
+    let rdev = std::os::unix::fs::MetadataExt::rdev(&metadata);
+    // glibc (sys/sysmacros.h) と同じ符号なしの桁割りで major/minor へ戻す。
+    let major = (((rdev >> 8) & 0xfff) | u64::from((rdev >> 32) as u32 & !0xfffu32)) as i64;
+    let minor = ((rdev & 0xff) | u64::from((rdev >> 12) as u32 & !0xffu32)) as i64;
+    Some(RenderNodeIdentity {
+        major,
+        minor,
+        pci_bdf: read_render_node_pci_bdf(path),
+    })
+}
+
+/// sysfs (/sys/class/drm/<node>/device) の symlink から PCI BDF を読む。
+#[cfg(unix)]
+fn read_render_node_pci_bdf(path: &Path) -> Option<(u32, u32, u32, u32)> {
+    let node_name = path.file_name()?.to_str()?;
+    let device = std::fs::read_link(format!("/sys/class/drm/{node_name}/device")).ok()?;
+    parse_pci_bdf(&device.to_string_lossy())
+}
+
+/// "0000:0b:00.0" 形式の PCI BDF を (domain, bus, device, function) へ解析する。
+#[cfg(unix)]
+fn parse_pci_bdf(text: &str) -> Option<(u32, u32, u32, u32)> {
+    let (domain, rest) = text.split_once(':')?;
+    let (bus, rest) = rest.split_once(':')?;
+    let (device, function) = rest.split_once('.')?;
+    Some((
+        u32::from_str_radix(domain, 16).ok()?,
+        u32::from_str_radix(bus, 16).ok()?,
+        u32::from_str_radix(device, 16).ok()?,
+        u32::from_str_radix(function, 16).ok()?,
+    ))
+}
+
+/// 列挙されたアダプターから render ノードに対応するものを 1 つ選ぶ (unix)。
+/// どのアダプターも対応づけできなければ None (フォールバック)。
+#[cfg(unix)]
+fn find_matching_adapter(
+    raw: &ash::Instance,
+    adapters: &[wgpu::Adapter],
+    identity: &RenderNodeIdentity,
+) -> Option<wgpu::Adapter> {
+    for adapter in adapters {
+        // wgpu の列挙順は Vulkan の物理デバイス順を保存するため、hal の生デバイスは
+        // このアダプターそのものを指す。
+        let physical = unsafe {
+            adapter.as_hal::<wgpu_hal::vulkan::Api, _, _>(|hal_adapter| {
+                hal_adapter.map(|hal_adapter| hal_adapter.raw_physical_device())
+            })
+        };
+        let Some(physical) = physical else { continue };
+        let extensions = unsafe { raw.enumerate_device_extension_properties(physical) };
+        let Ok(extensions) = extensions else { continue };
+        // 最優先は VK_EXT_physical_device_drm の render 番号 (Mesa 系・NVIDIA)。
+        if has_extension(&extensions, b"VK_EXT_physical_device_drm") {
+            let mut drm = ash::vk::PhysicalDeviceDrmPropertiesEXT::default();
+            let mut props = ash::vk::PhysicalDeviceProperties2::default().push_next(&mut drm);
+            unsafe { raw.get_physical_device_properties2(physical, &mut props) };
+            if drm.has_render == ash::vk::TRUE
+                && drm.render_major == identity.major
+                && drm.render_minor == identity.minor
+            {
+                return Some(adapter.clone());
+            }
+        }
+        // DRM を報告しないドライバ (AMDVLK など) は sysfs の PCI BDF と
+        // VK_EXT_pci_bus_info で対応づける。render ノード側の BDF が読めなければ省略。
+        if let Some(bdf) = identity.pci_bdf {
+            if has_extension(&extensions, b"VK_EXT_pci_bus_info") {
+                let mut pci = ash::vk::PhysicalDevicePCIBusInfoPropertiesEXT::default();
+                let mut props = ash::vk::PhysicalDeviceProperties2::default().push_next(&mut pci);
+                unsafe { raw.get_physical_device_properties2(physical, &mut props) };
+                if (
+                    pci.pci_domain,
+                    pci.pci_bus,
+                    pci.pci_device,
+                    pci.pci_function,
+                ) == bdf
+                {
+                    return Some(adapter.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 拡張一覧に指定した名前があるかどうか。
+#[cfg(unix)]
+fn has_extension(extensions: &[ash::vk::ExtensionProperties], name: &[u8]) -> bool {
+    extensions.iter().any(|properties| {
+        properties
+            .extension_name_as_c_str()
+            .map(|c_str| c_str.to_bytes() == name)
+            .unwrap_or(false)
+    })
+}
+
+impl GpuEngine {
     /// Per-block avgdist table for the precomputed block offsets.
     /// None on any compute failure (caller falls back to CPU).
     pub fn block_stats(

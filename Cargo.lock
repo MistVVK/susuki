@@ -972,9 +972,11 @@ dependencies = [
 name = "susuki-core"
 version = "0.1.8"
 dependencies = [
+ "ash",
  "pollster",
  "susuki-logo-file",
  "wgpu",
+ "wgpu-hal",
 ]
 
 [[package]]
