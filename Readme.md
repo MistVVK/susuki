@@ -158,7 +158,7 @@ susuki INPUT.ts --no-logo --output-stdout json
   JSON の `analysis.missing_video_ranges` と `video_frames_missing` を確認する。
   保護は `result.keep_ranges` と chapter に反映する。`result.segments` と div は保護前の判定情報。
   このオプション単独では逆行・重複を許容しない。30 秒超の欠落も失敗する。
-- --tolerate-video-timestamp-errors は復号後の短い表示時刻の逆行を最大 2 フレーム先まで並べ替える。
+- --tolerate-video-timestamp-errors は復号後の短い表示時刻の逆行を最大 8 フレーム先まで並べ替える。
   同じ時刻の複数画像は正しい画像を確定できないため、その期間を不明として保護する。
   不明範囲と警告の出力は映像欠落と同じ。窓より深い逆行や時刻のない映像は失敗する。
 - 色記述だけが変化した場合、各フレームの native luma で解析し、境界のフレーム同士を

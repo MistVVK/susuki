@@ -72,6 +72,9 @@ use susuki_decode::engine::{DecoderEngine, FrameEvent, InputSpec};
 use susuki_decode::frame::DecodedFrame;
 use susuki_decode::luma::{downscale, scale_factor, Luma};
 
+/// 破損した放送映像の表示順を整列する。8K 映像でも保持数を固定してメモリを制限する。
+const VIDEO_REORDER_LOOKAHEAD: usize = 8;
+
 struct Runner {
     feats: Vec<Option<susuki_core::mvec::PairFeat>>,
     prev: Option<Arc<Luma>>,
@@ -454,7 +457,7 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
     let mut timeline = crate::timeline::Timeline::new(info.fps_num, info.fps_den);
     // 復号後の短い PTS 逆行だけを整列する。巨大な録画でも保持数を固定し、
     // この窓より深い逆行は timeline 側で失敗させて不確かな結果を公開しない。
-    let mut reorder: Vec<DecodedFrame> = Vec::with_capacity(3);
+    let mut reorder: Vec<DecodedFrame> = Vec::with_capacity(VIDEO_REORDER_LOOKAHEAD + 1);
     let mut decoder_ended = false;
     let mut last_progress = std::time::Instant::now();
     // 次の PTS が来るまで直前の画像を保持し、表示期間内の格子へ複製する。
@@ -511,13 +514,13 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
             }
         };
         let ev = match event {
-            // 最大 2 フレーム先まで見て最小 PTS を出す。PTS がない映像は整列できない。
+            // 最大 8 フレーム先まで見て最小 PTS を出す。PTS がない映像は整列できない。
             Some(FrameEvent::Video(frame)) if opts.decode.tolerate_video_timestamp_errors => {
                 if frame.pts_us.is_none() {
                     return Err(("video frame has no usable PTS".into(), 5));
                 }
                 reorder.push(frame);
-                if reorder.len() <= 2 {
+                if reorder.len() <= VIDEO_REORDER_LOOKAHEAD {
                     continue;
                 }
                 let index = reorder
