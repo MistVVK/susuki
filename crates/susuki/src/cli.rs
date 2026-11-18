@@ -70,6 +70,8 @@ pub struct DecodeConfig {
     pub tolerate_audio_decode_errors: bool,
     /// 大きな映像欠落を不明な区間として扱う。時間の逆行は許容しない。
     pub tolerate_video_gaps: bool,
+    /// 小さな時刻の逆行を並べ替え、重複時刻は不明な映像として保護する。
+    pub tolerate_video_timestamp_errors: bool,
     /// --expected-duration: 期待される番組尺 (秒)。映像パケットが先に枯れた録画でも
     /// 解析タイムラインを期待尺まで延ばし、音声だけで続く後半の CM を検出できるようにする。
     pub expected_duration: Option<f64>,
@@ -364,6 +366,15 @@ where
                 }
                 p.mark_once("--tolerate-video-gaps")?;
                 p.opts.decode.tolerate_video_gaps = true;
+            }
+            "--tolerate-video-timestamp-errors" => {
+                if inline.is_some() {
+                    return Err(ArgError(
+                        "--tolerate-video-timestamp-errors takes no value".to_string(),
+                    ));
+                }
+                p.mark_once("--tolerate-video-timestamp-errors")?;
+                p.opts.decode.tolerate_video_timestamp_errors = true;
             }
             "--backend" => {
                 p.mark_once("--backend")?;

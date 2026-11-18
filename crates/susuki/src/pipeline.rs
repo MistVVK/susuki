@@ -452,10 +452,16 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
     let mut total_frames: i64 = 0;
     let mut video_gaps: Vec<(i64, i64)> = Vec::new();
     let mut timeline = crate::timeline::Timeline::new(info.fps_num, info.fps_den);
+    // 復号後の短い PTS 逆行だけを整列する。巨大な録画でも保持数を固定し、
+    // この窓より深い逆行は timeline 側で失敗させて不確かな結果を公開しない。
+    let mut reorder: Vec<DecodedFrame> = Vec::with_capacity(3);
+    let mut decoder_ended = false;
     let mut last_progress = std::time::Instant::now();
     // 次の PTS が来るまで直前の画像を保持し、表示期間内の格子へ複製する。
     // 元フレーム全体を蓄積せず、音声・映像・ロゴを同じ実時間の格子で解析する。
     let mut pending_frame: Option<DecodedFrame> = None;
+    // 同じ PTS の映像を識別できない間は、その格子を不明として保護する。
+    let mut pending_ambiguous = false;
     let mut previous_color_epoch: Option<u64> = None;
     let mut push_video = |frame: Option<&DecodedFrame>, index: i64| {
         // 欠落区間はロゴなしや静止画と断定せず、前後の映像も比較しない。
@@ -493,16 +499,57 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
         if interrupted() {
             return Ok(interrupted_in_analysis());
         }
-        let ev = match engine.next_event() {
-            Ok(ev) => ev,
-            Err(susuki_decode::error::DecodeError::Interrupted) => {
-                return Ok(interrupted_in_analysis())
+        let event = if decoder_ended {
+            None
+        } else {
+            match engine.next_event() {
+                Ok(ev) => ev,
+                Err(susuki_decode::error::DecodeError::Interrupted) => {
+                    return Ok(interrupted_in_analysis())
+                }
+                Err(e) => return Err((format!("decode failed: {:?}", e), e.exit_code())),
             }
-            Err(e) => return Err((format!("decode failed: {:?}", e), e.exit_code())),
         };
-        let Some(ev) = ev else { break };
+        let ev = match event {
+            // 最大 2 フレーム先まで見て最小 PTS を出す。PTS がない映像は整列できない。
+            Some(FrameEvent::Video(frame)) if opts.decode.tolerate_video_timestamp_errors => {
+                if frame.pts_us.is_none() {
+                    return Err(("video frame has no usable PTS".into(), 5));
+                }
+                reorder.push(frame);
+                if reorder.len() <= 2 {
+                    continue;
+                }
+                let index = reorder
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, f)| f.pts_us)
+                    .expect("video reorder buffer is not empty")
+                    .0;
+                FrameEvent::Video(reorder.remove(index))
+            }
+            Some(event) => event,
+            // EOF では残りの映像を同じ順序で出し切ってから終端を求める。
+            None => {
+                decoder_ended = true;
+                let Some((index, _)) = reorder.iter().enumerate().min_by_key(|(_, f)| f.pts_us)
+                else {
+                    break;
+                };
+                FrameEvent::Video(reorder.remove(index))
+            }
+        };
         match ev {
             FrameEvent::Video(f) => {
+                // PTS の重複はどの画像が正しいか確定できない。許可時だけ保留区間を不明にする。
+                if opts.decode.tolerate_video_timestamp_errors
+                    && pending_frame
+                        .as_ref()
+                        .is_some_and(|previous| previous.pts_us == f.pts_us)
+                {
+                    pending_ambiguous = true;
+                    continue;
+                }
                 let (boundary, missing_start) = timeline.video(
                     f.pts_us,
                     &mut mutedet,
@@ -511,13 +558,17 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
                         .as_ref()
                         .and_then(|previous| previous.duration_us),
                 )?;
-                if let Some(start) = missing_start {
+                if pending_ambiguous && total_frames < boundary {
+                    // 重複映像の区間は全部不明とする。長い欠落もここに含まれる。
+                    video_gaps.push((total_frames, boundary));
+                } else if let Some(start) = missing_start {
                     // 前の格子との丸めを保護し、欠落の半開区間を出力にも残す。
                     let start = start.max(total_frames).min(boundary);
                     if start < boundary {
                         video_gaps.push((start, boundary));
                     }
                 }
+                let advanced = total_frames < boundary;
                 if let Some(previous) = &pending_frame {
                     // 同じ格子に複数の映像が来た場合、最後の映像を採用する。
                     while total_frames < boundary {
@@ -525,10 +576,15 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
                             return Ok(interrupted_in_analysis());
                         }
                         // 実フレームの表示終端より後は観測不能のまま格子を進める。
-                        let observed = missing_start.is_none_or(|start| total_frames < start);
+                        let observed = !pending_ambiguous
+                            && missing_start.is_none_or(|start| total_frames < start);
                         push_video(observed.then_some(previous), total_frames);
                         total_frames += 1;
                     }
+                }
+                // 同じ格子に留まった場合は不明状態を次の境界まで引き継ぐ。
+                if advanced {
+                    pending_ambiguous = false;
                 }
                 pending_frame = Some(f);
                 if last_progress.elapsed().as_secs() >= 1 {
@@ -541,12 +597,16 @@ fn run_inner(opts: &Options) -> Result<ExitCode, (String, u8)> {
     }
     let last = pending_frame.ok_or_else(|| ("no video frames decoded".to_string(), 5u8))?;
     let video_end = timeline.video_end(last.duration_us)?;
+    // 最後の PTS が重複した場合も、映像の終端まで不明として保護する。
+    if pending_ambiguous && total_frames < video_end {
+        video_gaps.push((total_frames, video_end));
+    }
     // 最終映像の実際の表示期間も含め、最後の格子を生成する。
     while total_frames < video_end {
         if interrupted() {
             return Ok(interrupted_in_analysis());
         }
-        push_video(Some(&last), total_frames);
+        push_video((!pending_ambiguous).then_some(&last), total_frames);
         total_frames += 1;
     }
     drop(push_video);
